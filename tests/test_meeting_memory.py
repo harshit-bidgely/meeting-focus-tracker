@@ -1,26 +1,32 @@
-"""Tests for cross-meeting memory and repetition detection."""
+"""Tests for cross-meeting memory (SQLite-backed) and repetition detection."""
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
-
 import pytest
 
-from services.meeting_memory import MeetingMemory
+from services.meeting_memory import MeetingMemory, DB_PATH
 from prompts.repetition_detector import build_repetition_suffix
 
 
+@pytest.fixture(autouse=True)
+def clean_db():
+    """Remove the global DB before and after each test for isolation."""
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    yield
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+
+
 class TestMeetingMemory:
-    """Test local JSON storage and fuzzy matching."""
+    """Test SQLite storage and fuzzy matching."""
 
-    def _make_memory(self, tmp_path: str) -> MeetingMemory:
-        path = os.path.join(tmp_path, "test_history.json")
-        return MeetingMemory(storage_path=path)
+    def _make_memory(self) -> MeetingMemory:
+        return MeetingMemory()
 
-    def test_save_and_load(self, tmp_path):
-        mem = self._make_memory(str(tmp_path))
+    def test_save_and_load(self):
+        mem = self._make_memory()
         mem.save_meeting(
             meeting_id="abc-123",
             date="2026-03-28T14:00:00",
@@ -31,14 +37,15 @@ class TestMeetingMemory:
             open_items=["Need pricing proposal"],
             deviation_count=2,
         )
-        # Reload from disk
-        mem2 = MeetingMemory(storage_path=mem.storage_path)
-        assert len(mem2.data["meetings"]) == 1
-        assert mem2.data["meetings"][0]["meeting_id"] == "abc-123"
+        # Verify via query
+        meetings = mem.get_all_meetings()
+        assert len(meetings) == 1
+        assert meetings[0]["meeting_id"] == "abc-123"
+        assert meetings[0]["decisions"] == ["Focus on enterprise"]
 
-    def test_fuzzy_match_similar_agenda(self, tmp_path):
+    def test_fuzzy_match_similar_agenda(self):
         """'Q3 Sales Strategy' should match 'Q3 Sales Planning'."""
-        mem = self._make_memory(str(tmp_path))
+        mem = self._make_memory()
         mem.save_meeting(
             meeting_id="m1",
             date="2026-03-21",
@@ -53,9 +60,9 @@ class TestMeetingMemory:
         assert len(related) == 1
         assert related[0]["meeting_id"] == "m1"
 
-    def test_fuzzy_match_exact(self, tmp_path):
+    def test_fuzzy_match_exact(self):
         """Exact same agenda text should match."""
-        mem = self._make_memory(str(tmp_path))
+        mem = self._make_memory()
         mem.save_meeting(
             meeting_id="m1",
             date="2026-03-21",
@@ -69,9 +76,9 @@ class TestMeetingMemory:
         related = mem.find_related_meetings(["Hiring Plan"])
         assert len(related) == 1
 
-    def test_no_match_unrelated(self, tmp_path):
+    def test_no_match_unrelated(self):
         """Unrelated agendas should not match."""
-        mem = self._make_memory(str(tmp_path))
+        mem = self._make_memory()
         mem.save_meeting(
             meeting_id="m1",
             date="2026-03-21",
@@ -85,13 +92,13 @@ class TestMeetingMemory:
         related = mem.find_related_meetings(["Engineering Sprint Planning"], threshold=0.55)
         assert len(related) == 0
 
-    def test_empty_memory_returns_empty(self, tmp_path):
-        mem = self._make_memory(str(tmp_path))
+    def test_empty_memory_returns_empty(self):
+        mem = self._make_memory()
         related = mem.find_related_meetings(["Anything"])
         assert related == []
 
-    def test_max_results_limit(self, tmp_path):
-        mem = self._make_memory(str(tmp_path))
+    def test_max_results_limit(self):
+        mem = self._make_memory()
         for i in range(5):
             mem.save_meeting(
                 meeting_id=f"m{i}",
@@ -106,8 +113,8 @@ class TestMeetingMemory:
         related = mem.find_related_meetings(["Budget Review"], max_results=2)
         assert len(related) == 2
 
-    def test_build_context_summary_format(self, tmp_path):
-        mem = self._make_memory(str(tmp_path))
+    def test_build_context_summary_format(self):
+        mem = self._make_memory()
         meetings = [
             {
                 "date": "2026-03-21T14:00:00",
@@ -122,12 +129,35 @@ class TestMeetingMemory:
         assert "Focus on enterprise" in ctx
         assert "Need pricing proposal" in ctx
 
-    def test_corrupted_file_handled(self, tmp_path):
-        path = os.path.join(str(tmp_path), "bad.json")
-        with open(path, "w") as f:
-            f.write("not valid json{{{")
-        mem = MeetingMemory(storage_path=path)
-        assert mem.data == {"meetings": []}
+    def test_search_decisions(self):
+        mem = self._make_memory()
+        mem.save_meeting(
+            meeting_id="m1",
+            date="2026-03-21",
+            agenda_raw="1. Hiring",
+            agenda_items=["Hiring"],
+            final_summary="Discussed hiring",
+            decisions=["Hire 3 backend engineers"],
+            open_items=[],
+            deviation_count=0,
+        )
+        results = mem.search_decisions("backend")
+        assert len(results) == 1
+
+    def test_search_summaries(self):
+        mem = self._make_memory()
+        mem.save_meeting(
+            meeting_id="m1",
+            date="2026-03-21",
+            agenda_raw="1. Layoffs",
+            agenda_items=["Layoffs"],
+            final_summary="Discussed layoffs and severance packages",
+            decisions=[],
+            open_items=[],
+            deviation_count=0,
+        )
+        results = mem.search_summaries("severance")
+        assert len(results) == 1
 
 
 class TestRepetitionSuffix:

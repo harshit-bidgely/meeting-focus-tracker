@@ -1,4 +1,5 @@
 .env
+.DS_Store
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -7,3 +8,7 @@ dist/
 build/
 .venv/
 venv/
+summaries/
+transcripts/
+meeting_data/
+meetings.db

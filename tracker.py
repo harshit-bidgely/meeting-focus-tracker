@@ -11,8 +11,11 @@ from config import Config
 from prompts.agenda_extractor import AGENDA_EXTRACTOR_SYSTEM
 from prompts.focus_tracker import FOCUS_TRACKER_SYSTEM, build_user_message
 from prompts.repetition_detector import build_repetition_suffix
+from prompts.summary_generator import SUMMARY_GENERATOR_SYSTEM, build_summary_message
 from services.llm_client import LLMClient
 from services.meeting_memory import MeetingMemory
+from services.similarity import generate_thread_insight
+from services.thread_store import save_meeting_to_thread, find_matching_thread, get_thread_meetings
 from services.transcript_cleaner import clean_segments, count_meaningful_words
 from services.vexa_client import VexaClient
 
@@ -37,6 +40,7 @@ class MeetingState:
     deviation_counter: float = 0.0
     last_alert_time: float = 0.0
     cycle_count: int = 0
+    full_transcript: str = ""
     had_transcript: bool = False          # True once we've seen real transcript
     empty_cycles_since_data: int = 0      # consecutive empty cycles after data
 
@@ -65,7 +69,7 @@ class MeetingFocusTracker:
         result = self.llm.call(
             system_prompt=AGENDA_EXTRACTOR_SYSTEM,
             user_message=description,
-            max_tokens=512,
+            max_tokens=1024,
         )
         status = result.get("status", "")
         if status == "no_agenda_found":
@@ -115,6 +119,15 @@ class MeetingFocusTracker:
         )
         if latest_ts:
             self.state.last_segment_timestamp = latest_ts
+        return cleaned_text
+
+    def fetch_full_transcript(self) -> str:
+        """Fetch the COMPLETE transcript from Vexa (no timestamp filter). Used on exit."""
+        data = self.vexa.get_transcript(self.platform, self.meeting_id)
+        segments = data.get("segments", [])
+        if not segments:
+            return ""
+        cleaned_text, _ = clean_segments(segments, after_timestamp=None)
         return cleaned_text
 
     # ------------------------------------------------------------------
@@ -194,8 +207,8 @@ class MeetingFocusTracker:
         # macOS desktop notification — pops up on screen over Google Meet
         notif_title = "Off Topic!" if level == "off_topic" else "Drifting!"
         # Escape double quotes for AppleScript
-        safe_reason = reason.replace('"', '\\"')
-        safe_suggestion = suggestion.replace('"', '\\"')
+        safe_reason = (reason or "").replace('"', '\\"')
+        safe_suggestion = (suggestion or "Consider returning to the agenda.").replace('"', '\\"')
         applescript = (
             f'display notification "{safe_reason}\\n{safe_suggestion}" '
             f'with title "Meeting Focus Tracker" '
@@ -278,8 +291,15 @@ class MeetingFocusTracker:
                         # Track empty cycles after we've had real data
                         if self.state.had_transcript:
                             self.state.empty_cycles_since_data += 1
-                            if self.state.empty_cycles_since_data >= 3:
-                                print(f"\n[Cycle {cycle}] Meeting appears to have ended (no new transcript for {self.state.empty_cycles_since_data} cycles)")
+                            if self.state.empty_cycles_since_data >= 1:
+                                time.sleep(2)
+                                # One final check to be sure
+                                final_transcript = self.fetch_new_transcript()
+                                if count_meaningful_words(final_transcript) >= 5:
+                                    self.state.empty_cycles_since_data = 0
+                                    self.state.full_transcript += "\n" + final_transcript
+                                    continue
+                                print(f"\n[Cycle {cycle}] Meeting ended — no new transcript.")
                                 print("Saving meeting to memory...")
                                 self._save_to_memory()
                                 print("Meeting saved. Exiting.")
@@ -347,30 +367,128 @@ class MeetingFocusTracker:
             print("Stopping focus tracker. Goodbye!")
 
     def _save_to_memory(self) -> None:
-        """Persist current meeting summary to local memory."""
+        """Persist meeting: transcript + summary + thread grouping + memory."""
         from datetime import datetime, timezone
-        try:
-            summary = self.state.rolling_summary
-            decisions = []
-            open_items = []
-            for line in summary.replace("\\n", "\n").split("\n"):
-                lower = line.lower()
-                if "done:" in lower or "decided" in lower:
-                    decisions.append(line.strip())
-                elif "not_started" in lower or "pending" in lower or "tbd" in lower:
-                    open_items.append(line.strip())
 
+        now = datetime.now()
+        rolling = self.state.rolling_summary
+
+        # 1. Fetch COMPLETE transcript from Vexa (not cycle deltas)
+        print("  Fetching complete transcript from Vexa...")
+        time.sleep(3)  # let Vexa flush final segments
+        raw_transcript = self.fetch_full_transcript()
+        if not raw_transcript.strip():
+            raw_transcript = self.state.full_transcript or ""
+
+        # 2. Build structured transcript with metadata header
+        transcript_lines = [
+            f"MEETING TRANSCRIPT",
+            f"{'='*50}",
+            f"Meeting ID : {self.meeting_id}",
+            f"Date       : {now.strftime('%Y-%m-%d %H:%M')}",
+            f"Platform   : {self.platform}",
+            f"Agenda     : {self.agenda_formatted.replace(chr(10), ' | ')}",
+            f"{'='*50}",
+            f"",
+        ]
+        if raw_transcript.strip():
+            transcript_lines.append(raw_transcript)
+        else:
+            transcript_lines.append("(no transcript captured)")
+        full_transcript = "\n".join(transcript_lines)
+
+        # 3. Generate LLM-powered structured summary
+        print("  Generating meeting summary...")
+        try:
+            summary_data = self.llm.call(
+                system_prompt=SUMMARY_GENERATOR_SYSTEM,
+                user_message=build_summary_message(
+                    agenda=self.agenda_formatted,
+                    rolling_summary=rolling,
+                    full_transcript=raw_transcript,
+                ),
+                max_tokens=2048,
+            )
+            # Inject metadata the LLM doesn't know
+            summary_data["meeting_id"] = self.meeting_id
+            summary_data["date"] = now.isoformat()
+            summary_data["platform"] = self.platform
+            summary_data["agenda_raw"] = self.agenda_formatted
+            summary_data["deviation_count"] = int(self.state.deviation_counter)
+        except Exception:
+            logger.exception("LLM summary generation failed, using fallback")
+            summary_data = {
+                "meeting_id": self.meeting_id,
+                "date": now.isoformat(),
+                "agenda_raw": self.agenda_formatted,
+                "agenda_items": self.agenda_items,
+                "rolling_summary": rolling,
+                "title": f"Meeting {self.meeting_id} — {now.strftime('%Y-%m-%d %H:%M')}",
+                "deviation_count": int(self.state.deviation_counter),
+            }
+
+        # Extract decisions/open_items for memory storage
+        decisions = []
+        open_items = []
+        for item in summary_data.get("agenda_items", []):
+            decisions.extend(item.get("decisions", []))
+            open_items.extend(item.get("action_items", []))
+        for a in summary_data.get("overall_action_items", []):
+            open_items.append(a.get("action", ""))
+
+        try:
+            # 3. Save to thread structure (transcript + summary grouped by agenda)
+            meeting_dir = save_meeting_to_thread(
+                meeting_id=self.meeting_id,
+                agenda=self.agenda_formatted,
+                agenda_items=self.agenda_items,
+                summary=summary_data,
+                transcript=full_transcript,
+                rolling_summary=rolling,
+            )
+            print(f"  Saved to thread: {meeting_dir}")
+
+            # 4. Also save to flat meeting memory (for fuzzy matching / LLM context injection)
             self.memory.save_meeting(
                 meeting_id=self.meeting_id,
                 date=datetime.now(timezone.utc).isoformat(),
                 agenda_raw=self.agenda_formatted,
                 agenda_items=self.agenda_items,
-                final_summary=summary,
+                final_summary=rolling,
                 decisions=decisions,
                 open_items=open_items,
                 deviation_count=int(self.state.deviation_counter),
             )
-            logger.info("Meeting saved to memory")
+
+            # 5. Thread insight
+            thread_dir = find_matching_thread(self.agenda_formatted)
+            if thread_dir:
+                thread_meetings = get_thread_meetings(thread_dir)
+                if len(thread_meetings) >= 2:
+                    print(f"\n{'─'*60}")
+                    print(f"  THREAD HISTORY ({len(thread_meetings)} meetings on this agenda)")
+                    print(f"{'─'*60}")
+                    for m in thread_meetings:
+                        date_str = m.get("date", "")[:16].replace("T", " ")
+                        title = m.get("title", "Untitled")[:50]
+                        print(f"    {date_str}  {title}")
+                    print(f"{'─'*60}")
+
+            all_related = self.memory.find_related_meetings(
+                self.agenda_items, max_results=10, threshold=0.4
+            )
+            if len(all_related) >= 2:
+                thread = generate_thread_insight(all_related)
+                print(f"\n{'─'*60}")
+                print(f"  REPETITION ANALYSIS ({thread['total_meetings']} meetings)")
+                print(f"{'─'*60}")
+                print(f"  Repetition : {thread['repetition_pct']}%")
+                if thread.get("repeated_topics"):
+                    print(f"  Recurring  : {', '.join(str(t) for t in thread['repeated_topics'][:5])}")
+                print(f"  Decisions  : {thread.get('total_decisions', 0)} total across thread")
+                print(f"  Insight    : {thread['insight']}")
+                print(f"{'─'*60}")
+
         except Exception:
             logger.exception("Failed to save meeting to memory")
 
