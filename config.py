@@ -33,7 +33,12 @@ class Config:
     ENABLE_GOOGLE_CALENDAR: bool = os.getenv("ENABLE_GOOGLE_CALENDAR", "false").lower() == "true"
     ENABLE_GMAIL_SUMMARY: bool = os.getenv("ENABLE_GMAIL_SUMMARY", "false").lower() == "true"
     ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "false").lower() == "true"
+    ENABLE_GOOGLE_CHAT: bool = os.getenv("ENABLE_GOOGLE_CHAT", "false").lower() == "true"
     GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+
+    # Agenda enforcement
+    REQUIRE_AGENDA_VALIDATION: bool = os.getenv("REQUIRE_AGENDA_VALIDATION", "true").lower() == "true"
+    AGENDA_MIN_QUALITY: str = os.getenv("AGENDA_MIN_QUALITY", "fair")  # poor|fair|good|excellent
 
     # Auto mode — bot auto-joins meetings from calendar
     AUTO_JOIN_LEAD_MINUTES: int = int(os.getenv("AUTO_JOIN_LEAD_MINUTES", "2"))
@@ -55,4 +60,9 @@ class Config:
     @classmethod
     def google_enabled(cls) -> bool:
         """Return True if any Google Workspace integration is enabled."""
-        return cls.ENABLE_GOOGLE_CALENDAR or cls.ENABLE_GMAIL_SUMMARY or cls.ENABLE_GOOGLE_DRIVE
+        return (
+            cls.ENABLE_GOOGLE_CALENDAR
+            or cls.ENABLE_GMAIL_SUMMARY
+            or cls.ENABLE_GOOGLE_DRIVE
+            or cls.ENABLE_GOOGLE_CHAT
+        )

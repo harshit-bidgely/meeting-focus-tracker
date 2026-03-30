@@ -14,6 +14,7 @@ from prompts.repetition_detector import build_repetition_suffix
 from prompts.summary_generator import SUMMARY_GENERATOR_SYSTEM, build_summary_message
 from services.llm_client import LLMClient
 from services.meeting_memory import MeetingMemory
+from services.metrics import MeetingMetrics
 from services.similarity import generate_thread_insight
 from services.thread_store import save_meeting_to_thread, find_matching_thread, get_thread_meetings
 from services.transcript_cleaner import clean_segments, count_meaningful_words
@@ -447,6 +448,68 @@ class MeetingFocusTracker:
             if isinstance(a, dict):
                 open_items.append(a.get("action", ""))
 
+        # 3.5. Compute efficiency metrics
+        print("  Computing meeting efficiency metrics...")
+        try:
+            # Estimate meeting duration in minutes
+            meeting_duration = (self.state.cycle_count * (Config.POLL_INTERVAL / 60.0))
+            if meeting_duration == 0:
+                meeting_duration = 30  # default estimate
+
+            # Compute adherence score (based on deviation counter)
+            adherence_score = MeetingMetrics.compute_adherence_score(
+                deviation_count=self.state.deviation_counter,
+                total_cycles=self.state.cycle_count,
+            )
+
+            # Estimate redundancy (assume if we had related meetings, some redundancy)
+            related_meetings = self.memory.find_related_meetings(
+                self.agenda_items, max_results=3, threshold=0.4
+            )
+            redundancy_score = MeetingMetrics.compute_redundancy_score(
+                repetition_detected=len(related_meetings) > 0,
+                repetition_count=1 if len(related_meetings) > 0 else 0,
+                total_topics_discussed=len(self.agenda_items) if self.agenda_items else 1,
+            )
+
+            # Compute decision rate
+            decision_rate = MeetingMetrics.compute_decision_rate(
+                decisions=decisions,
+                meeting_duration_minutes=meeting_duration,
+            )
+
+            # Compute overall efficiency
+            overall_efficiency = MeetingMetrics.compute_overall_efficiency(
+                adherence_score=adherence_score,
+                redundancy_score=redundancy_score,
+                decision_rate=decision_rate,
+            )
+
+            # Store metrics in summary
+            summary_data["metrics"] = {
+                "adherence_score": adherence_score,
+                "redundancy_score": redundancy_score,
+                "decision_rate": round(decision_rate, 2),
+                "overall_efficiency": overall_efficiency,
+                "meeting_duration_minutes": meeting_duration,
+                "cycles_analyzed": self.state.cycle_count,
+            }
+
+            # Display metrics report
+            metrics_report = MeetingMetrics.build_metrics_report(
+                adherence_score=adherence_score,
+                redundancy_score=redundancy_score,
+                decision_rate=decision_rate,
+                overall=overall_efficiency,
+                decisions=decisions,
+                open_items=open_items,
+            )
+            print(metrics_report)
+
+        except Exception:
+            logger.exception("Failed to compute metrics (non-blocking)")
+            # Metrics are optional, continue even if computation fails
+
         try:
             # 4. Save to thread structure (transcript + summary grouped by agenda)
             meeting_dir = save_meeting_to_thread(
@@ -507,8 +570,9 @@ class MeetingFocusTracker:
             deviation_count = int(self.state.deviation_counter)
             summary_text = rolling
 
-            self._export_to_google_drive(title, summary_text, decisions, open_items, deviation_count)
+            drive_url = self._export_to_google_drive(title, summary_text, decisions, open_items, deviation_count)
             self._export_to_gmail(title, summary_text, decisions, open_items, deviation_count)
+            self._export_to_google_chat(title, summary_text, decisions, open_items, drive_url)
 
         except Exception:
             logger.exception("Failed to save meeting to memory")
@@ -516,10 +580,10 @@ class MeetingFocusTracker:
     def _export_to_google_drive(
         self, title: str, summary: str, decisions: list[str],
         open_items: list[str], deviation_count: int,
-    ) -> None:
-        """Save meeting notes to Google Drive if enabled."""
+    ) -> str | None:
+        """Save meeting notes to Google Drive if enabled. Returns doc URL."""
         if not Config.ENABLE_GOOGLE_DRIVE or not self.google_creds:
-            return
+            return None
         try:
             from services.google_drive import GoogleDriveService
             drive = GoogleDriveService(self.google_creds)
@@ -533,8 +597,10 @@ class MeetingFocusTracker:
             )
             if doc_url:
                 print(f"  Meeting notes saved to Google Drive: {doc_url}")
+            return doc_url
         except Exception:
             logger.exception("Google Drive export failed")
+            return None
 
     def _export_to_gmail(
         self, title: str, summary: str, decisions: list[str],
@@ -562,6 +628,32 @@ class MeetingFocusTracker:
                 print(f"  Meeting summary emailed to {len(self.attendees)} attendees")
         except Exception:
             logger.exception("Gmail export failed")
+
+    def _export_to_google_chat(
+        self, title: str, summary: str, decisions: list[str],
+        open_items: list[str], drive_url: str | None = None,
+    ) -> None:
+        """Post meeting summary to Google Chat spaces if enabled."""
+        if not Config.ENABLE_GOOGLE_CHAT or not self.google_creds:
+            return
+        if not self.attendees:
+            logger.info("Google Chat export skipped — no attendees")
+            return
+        try:
+            from services.google_chat import GoogleChatService
+            chat = GoogleChatService(self.google_creds)
+            chat.discover_and_cache_spaces()
+            result = chat.post_meeting_summary(
+                meeting_title=title,
+                participants=self.attendees,
+                decisions=decisions,
+                open_items=open_items,
+                drive_url=drive_url,
+            )
+            if result["success"] and result["spaces_posted"]:
+                print(f"  Posted to {len(result['spaces_posted'])} Google Chat spaces")
+        except Exception:
+            logger.exception("Google Chat export failed")
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""

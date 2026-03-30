@@ -241,6 +241,7 @@ class TestSaveToMemoryWithGSuite:
         with ExitStack() as stack:
             mock_drive = stack.enter_context(patch.object(tracker, "_export_to_google_drive"))
             mock_gmail = stack.enter_context(patch.object(tracker, "_export_to_gmail"))
+            mock_chat = stack.enter_context(patch.object(tracker, "_export_to_google_chat"))
             for p in _save_patches():
                 stack.enter_context(p)
             tracker._save_to_memory()
@@ -248,9 +249,10 @@ class TestSaveToMemoryWithGSuite:
         # Memory should be saved
         tracker.memory.save_meeting.assert_called_once()
 
-        # Both exports should be called
+        # All exports should be called
         mock_drive.assert_called_once()
         mock_gmail.assert_called_once()
+        mock_chat.assert_called_once()
 
         # Check title falls back correctly
         drive_call_args = mock_drive.call_args
@@ -272,6 +274,7 @@ class TestSaveToMemoryWithGSuite:
         with ExitStack() as stack:
             mock_drive = stack.enter_context(patch.object(tracker, "_export_to_google_drive"))
             mock_gmail = stack.enter_context(patch.object(tracker, "_export_to_gmail"))
+            stack.enter_context(patch.object(tracker, "_export_to_google_chat"))
             for p in _save_patches():
                 stack.enter_context(p)
             tracker._save_to_memory()
@@ -308,6 +311,7 @@ class TestSaveToMemoryWithGSuite:
         with ExitStack() as stack:
             stack.enter_context(patch.object(tracker, "_export_to_google_drive"))
             stack.enter_context(patch.object(tracker, "_export_to_gmail"))
+            stack.enter_context(patch.object(tracker, "_export_to_google_chat"))
             for p in _save_patches():
                 stack.enter_context(p)
             tracker._save_to_memory()

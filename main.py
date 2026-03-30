@@ -113,6 +113,27 @@ def _run_manual_mode() -> None:
         print("No calendar description provided. Exiting.")
         sys.exit(1)
 
+    # --- Agenda enforcement gate ---
+    if Config.REQUIRE_AGENDA_VALIDATION:
+        from services.agenda_validator import AgendaValidator
+        from services.calendar_watcher import _meets_quality_threshold
+
+        validation = AgendaValidator.validate(description)
+
+        if not _meets_quality_threshold(validation["quality_level"], Config.AGENDA_MIN_QUALITY):
+            print("\n" + "=" * 60)
+            print("  MEETING BLOCKED — AGENDA QUALITY TOO LOW")
+            print("=" * 60)
+            print(AgendaValidator.build_validation_message(validation))
+            print("=" * 60)
+            print(f"\nMinimum quality required: {Config.AGENDA_MIN_QUALITY}")
+            print("Please update the calendar event description with a clear agenda.")
+            print("Then re-run the tracker.")
+            sys.exit(1)
+
+        # Show validation result even if passing (informational)
+        print(f"\n  Agenda quality: {validation['quality_level']} ({validation['score']}/100)")
+
     if not meeting_id:
         print("No MEETING_ID found (and none from Google Calendar). Exiting.")
         sys.exit(1)

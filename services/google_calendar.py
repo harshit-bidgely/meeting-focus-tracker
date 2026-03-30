@@ -28,6 +28,7 @@ class CalendarEvent:
     start_time: datetime
     end_time: datetime
     attendees: list[str]
+    organizer_email: str = ""
 
 
 class GoogleCalendarService:
@@ -127,6 +128,9 @@ class GoogleCalendarService:
             if not a.get("self", False) and a.get("email")
         ]
 
+        # Extract organizer email
+        organizer_email = event.get("organizer", {}).get("email", "")
+
         return CalendarEvent(
             event_id=event.get("id", ""),
             summary=event.get("summary", "Untitled Meeting"),
@@ -135,6 +139,7 @@ class GoogleCalendarService:
             start_time=start_time,
             end_time=end_time,
             attendees=attendees,
+            organizer_email=organizer_email,
         )
 
     @staticmethod

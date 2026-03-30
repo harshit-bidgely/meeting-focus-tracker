@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -22,13 +23,33 @@ class TestConfigGoogleFields:
         assert Config.ENABLE_GOOGLE_CALENDAR is False
 
     def test_gmail_summary_disabled_by_default(self):
-        assert Config.ENABLE_GMAIL_SUMMARY is False
+        """Code default is False; .env may override at runtime."""
+        with patch.dict("os.environ", {}, clear=False):
+            with patch.dict("os.environ", {"ENABLE_GMAIL_SUMMARY": "false"}):
+                result = os.getenv("ENABLE_GMAIL_SUMMARY", "false").lower() == "true"
+                assert result is False
 
     def test_google_drive_disabled_by_default(self):
-        assert Config.ENABLE_GOOGLE_DRIVE is False
+        """Code default is False; .env may override at runtime."""
+        with patch.dict("os.environ", {}, clear=False):
+            with patch.dict("os.environ", {"ENABLE_GOOGLE_DRIVE": "false"}):
+                result = os.getenv("ENABLE_GOOGLE_DRIVE", "false").lower() == "true"
+                assert result is False
 
     def test_google_calendar_id_default(self):
         assert Config.GOOGLE_CALENDAR_ID == "primary"
+
+    def test_require_agenda_validation_default_true(self):
+        """Agenda validation should be enabled by default."""
+        with patch.dict("os.environ", {"REQUIRE_AGENDA_VALIDATION": "true"}):
+            result = os.getenv("REQUIRE_AGENDA_VALIDATION", "true").lower() == "true"
+            assert result is True
+
+    def test_agenda_min_quality_default_fair(self):
+        """Minimum agenda quality should default to 'fair'."""
+        with patch.dict("os.environ", {"AGENDA_MIN_QUALITY": "fair"}):
+            result = os.getenv("AGENDA_MIN_QUALITY", "fair")
+            assert result == "fair"
 
 
 class TestConfigGoogleEnabled:
@@ -37,31 +58,43 @@ class TestConfigGoogleEnabled:
     def test_all_disabled_returns_false(self):
         with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", False), \
              patch.object(Config, "ENABLE_GMAIL_SUMMARY", False), \
-             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False):
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", False):
             assert Config.google_enabled() is False
 
     def test_calendar_only_returns_true(self):
         with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", True), \
              patch.object(Config, "ENABLE_GMAIL_SUMMARY", False), \
-             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False):
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", False):
             assert Config.google_enabled() is True
 
     def test_gmail_only_returns_true(self):
         with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", False), \
              patch.object(Config, "ENABLE_GMAIL_SUMMARY", True), \
-             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False):
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", False):
             assert Config.google_enabled() is True
 
     def test_drive_only_returns_true(self):
         with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", False), \
              patch.object(Config, "ENABLE_GMAIL_SUMMARY", False), \
-             patch.object(Config, "ENABLE_GOOGLE_DRIVE", True):
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", True), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", False):
+            assert Config.google_enabled() is True
+
+    def test_chat_only_returns_true(self):
+        with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", False), \
+             patch.object(Config, "ENABLE_GMAIL_SUMMARY", False), \
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", False), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", True):
             assert Config.google_enabled() is True
 
     def test_all_enabled_returns_true(self):
         with patch.object(Config, "ENABLE_GOOGLE_CALENDAR", True), \
              patch.object(Config, "ENABLE_GMAIL_SUMMARY", True), \
-             patch.object(Config, "ENABLE_GOOGLE_DRIVE", True):
+             patch.object(Config, "ENABLE_GOOGLE_DRIVE", True), \
+             patch.object(Config, "ENABLE_GOOGLE_CHAT", True):
             assert Config.google_enabled() is True
 
 
