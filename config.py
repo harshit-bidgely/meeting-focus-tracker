@@ -27,6 +27,18 @@ class Config:
     )
     MEMORY_SIMILARITY_THRESHOLD: float = float(os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.55"))
 
+    # Google Workspace integration
+    GOOGLE_CREDENTIALS_FILE: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    GOOGLE_TOKEN_FILE: str = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
+    ENABLE_GOOGLE_CALENDAR: bool = os.getenv("ENABLE_GOOGLE_CALENDAR", "false").lower() == "true"
+    ENABLE_GMAIL_SUMMARY: bool = os.getenv("ENABLE_GMAIL_SUMMARY", "false").lower() == "true"
+    ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "false").lower() == "true"
+    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+
+    # Auto mode — bot auto-joins meetings from calendar
+    AUTO_JOIN_LEAD_MINUTES: int = int(os.getenv("AUTO_JOIN_LEAD_MINUTES", "2"))
+    CALENDAR_POLL_INTERVAL: int = int(os.getenv("CALENDAR_POLL_INTERVAL", "30"))
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return list of missing required config keys."""
@@ -35,6 +47,12 @@ class Config:
             missing.append("LLM_API_KEY")
         if not cls.VEXA_API_KEY:
             missing.append("VEXA_API_KEY")
-        if not cls.MEETING_ID:
+        # MEETING_ID is only required if Google Calendar auto-fetch is disabled
+        if not cls.MEETING_ID and not cls.ENABLE_GOOGLE_CALENDAR:
             missing.append("MEETING_ID")
         return missing
+
+    @classmethod
+    def google_enabled(cls) -> bool:
+        """Return True if any Google Workspace integration is enabled."""
+        return cls.ENABLE_GOOGLE_CALENDAR or cls.ENABLE_GMAIL_SUMMARY or cls.ENABLE_GOOGLE_DRIVE

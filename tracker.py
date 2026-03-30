@@ -48,7 +48,13 @@ class MeetingState:
 class MeetingFocusTracker:
     """Main orchestrator — extracts agenda, polls transcript, analyses focus, sends alerts."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        meeting_id: str | None = None,
+        google_creds=None,
+        meeting_title: str = "",
+        attendees: list[str] | None = None,
+    ) -> None:
         self.vexa = VexaClient(api_base=Config.VEXA_API_BASE, api_key=Config.VEXA_API_KEY)
         self.llm = LLMClient(api_key=Config.LLM_API_KEY, model=Config.LLM_MODEL, api_base=Config.LLM_API_BASE)
         self.memory = MeetingMemory(storage_path=Config.MEMORY_STORAGE_PATH)
@@ -57,7 +63,10 @@ class MeetingFocusTracker:
         self.agenda_items: list[str] = []
         self.past_context: str = ""
         self.platform: str = Config.MEETING_PLATFORM
-        self.meeting_id: str = Config.MEETING_ID
+        self.meeting_id: str = meeting_id or Config.MEETING_ID or ""
+        self.google_creds = google_creds
+        self.meeting_title: str = meeting_title
+        self.attendees: list[str] = attendees or []
 
     # ------------------------------------------------------------------
     # Step 1: agenda extraction (runs once)
@@ -367,7 +376,7 @@ class MeetingFocusTracker:
             print("Stopping focus tracker. Goodbye!")
 
     def _save_to_memory(self) -> None:
-        """Persist meeting: transcript + summary + thread grouping + memory."""
+        """Persist meeting: transcript + summary + thread grouping + memory + G Suite exports."""
         from datetime import datetime, timezone
 
         now = datetime.now()
@@ -431,13 +440,15 @@ class MeetingFocusTracker:
         decisions = []
         open_items = []
         for item in summary_data.get("agenda_items", []):
-            decisions.extend(item.get("decisions", []))
-            open_items.extend(item.get("action_items", []))
+            if isinstance(item, dict):
+                decisions.extend(item.get("decisions", []))
+                open_items.extend(item.get("action_items", []))
         for a in summary_data.get("overall_action_items", []):
-            open_items.append(a.get("action", ""))
+            if isinstance(a, dict):
+                open_items.append(a.get("action", ""))
 
         try:
-            # 3. Save to thread structure (transcript + summary grouped by agenda)
+            # 4. Save to thread structure (transcript + summary grouped by agenda)
             meeting_dir = save_meeting_to_thread(
                 meeting_id=self.meeting_id,
                 agenda=self.agenda_formatted,
@@ -448,7 +459,7 @@ class MeetingFocusTracker:
             )
             print(f"  Saved to thread: {meeting_dir}")
 
-            # 4. Also save to flat meeting memory (for fuzzy matching / LLM context injection)
+            # 5. Also save to flat meeting memory (for fuzzy matching / LLM context injection)
             self.memory.save_meeting(
                 meeting_id=self.meeting_id,
                 date=datetime.now(timezone.utc).isoformat(),
@@ -460,7 +471,7 @@ class MeetingFocusTracker:
                 deviation_count=int(self.state.deviation_counter),
             )
 
-            # 5. Thread insight
+            # 6. Thread insight
             thread_dir = find_matching_thread(self.agenda_formatted)
             if thread_dir:
                 thread_meetings = get_thread_meetings(thread_dir)
@@ -489,8 +500,68 @@ class MeetingFocusTracker:
                 print(f"  Insight    : {thread['insight']}")
                 print(f"{'─'*60}")
 
+            logger.info("Meeting saved to memory")
+
+            # 7. Export to Google Workspace
+            title = self.meeting_title or f"Meeting {self.meeting_id}"
+            deviation_count = int(self.state.deviation_counter)
+            summary_text = rolling
+
+            self._export_to_google_drive(title, summary_text, decisions, open_items, deviation_count)
+            self._export_to_gmail(title, summary_text, decisions, open_items, deviation_count)
+
         except Exception:
             logger.exception("Failed to save meeting to memory")
+
+    def _export_to_google_drive(
+        self, title: str, summary: str, decisions: list[str],
+        open_items: list[str], deviation_count: int,
+    ) -> None:
+        """Save meeting notes to Google Drive if enabled."""
+        if not Config.ENABLE_GOOGLE_DRIVE or not self.google_creds:
+            return
+        try:
+            from services.google_drive import GoogleDriveService
+            drive = GoogleDriveService(self.google_creds)
+            doc_url = drive.save_meeting_notes(
+                meeting_title=title,
+                agenda=self.agenda_formatted,
+                summary=summary,
+                decisions=decisions,
+                open_items=open_items,
+                deviation_count=deviation_count,
+            )
+            if doc_url:
+                print(f"  Meeting notes saved to Google Drive: {doc_url}")
+        except Exception:
+            logger.exception("Google Drive export failed")
+
+    def _export_to_gmail(
+        self, title: str, summary: str, decisions: list[str],
+        open_items: list[str], deviation_count: int,
+    ) -> None:
+        """Email meeting summary to attendees if enabled."""
+        if not Config.ENABLE_GMAIL_SUMMARY or not self.google_creds:
+            return
+        if not self.attendees:
+            logger.info("Gmail export skipped — no attendees to email")
+            return
+        try:
+            from services.gmail_service import GmailService
+            gmail = GmailService(self.google_creds)
+            sent = gmail.send_meeting_summary(
+                to_emails=self.attendees,
+                meeting_title=title,
+                agenda=self.agenda_formatted,
+                summary=summary,
+                decisions=decisions,
+                open_items=open_items,
+                deviation_count=deviation_count,
+            )
+            if sent:
+                print(f"  Meeting summary emailed to {len(self.attendees)} attendees")
+        except Exception:
+            logger.exception("Gmail export failed")
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""

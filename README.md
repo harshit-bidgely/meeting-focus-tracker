@@ -256,13 +256,126 @@ rm ~/.meeting_focus_tracker/meeting_history.json
 
 ---
 
+## Google Workspace (G Suite) Integration
+
+The tracker can optionally connect to your Google account to:
+
+- **Google Calendar** — Auto-fetch the meeting agenda and Google Meet ID from your calendar (no more manual `CALENDAR_DESCRIPTION` / `MEETING_ID`)
+- **Gmail** — Email a meeting summary report to all attendees when the meeting ends
+- **Google Drive** — Save meeting notes as a Google Doc in a "Meeting Focus Tracker Notes" folder
+
+### Step 1: Create a Google Cloud Project
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or use an existing one)
+3. Go to **APIs & Services > Library** and enable these APIs:
+   - Google Calendar API
+   - Gmail API
+   - Google Drive API
+   - Google Docs API
+
+### Step 2: Create OAuth2 Credentials
+
+1. Go to **APIs & Services > Credentials**
+2. Click **Create Credentials > OAuth client ID**
+3. If prompted, configure the **OAuth consent screen** first:
+   - Choose "External" (or "Internal" if using Google Workspace)
+   - Add your email as a test user
+4. For Application type, choose **Desktop app**
+5. Download the JSON file and save it as `credentials.json` in the project root
+
+### Step 3: Enable in .env
+
+Add these lines to your `.env` file:
+
+```
+# Google Workspace — set to true to enable each feature
+ENABLE_GOOGLE_CALENDAR=true
+ENABLE_GMAIL_SUMMARY=true
+ENABLE_GOOGLE_DRIVE=true
+
+# Optional: path to your credentials file (default: credentials.json)
+GOOGLE_CREDENTIALS_FILE=credentials.json
+
+# Optional: which calendar to read (default: primary)
+GOOGLE_CALENDAR_ID=primary
+```
+
+### Step 4: First Run — Authorize
+
+When you run `python3 main.py` with Google features enabled, a browser window will open asking you to sign in and authorize the app. This only happens once — after that, the token is saved in `token.json`.
+
+### Google Workspace Settings
+
+| Setting | What it controls | Default |
+|---------|-----------------|---------|
+| `ENABLE_GOOGLE_CALENDAR` | Auto-fetch agenda & Meet ID from Calendar | `false` |
+| `ENABLE_GMAIL_SUMMARY` | Email summary to attendees on meeting end | `false` |
+| `ENABLE_GOOGLE_DRIVE` | Save meeting notes as Google Doc | `false` |
+| `GOOGLE_CREDENTIALS_FILE` | Path to OAuth client secrets JSON | `credentials.json` |
+| `GOOGLE_TOKEN_FILE` | Path to cached OAuth token | `token.json` |
+| `GOOGLE_CALENDAR_ID` | Which calendar to read events from | `primary` |
+
+### Important Notes
+
+- `credentials.json` and `token.json` are in `.gitignore` — they are never uploaded to GitHub
+- The first time you enable Google features, you must be at your computer to authorize in the browser
+- If you only want Calendar auto-fetch (no email/drive), just set `ENABLE_GOOGLE_CALENDAR=true`
+- Gmail sends emails **from your account** to the attendees listed on the calendar event
+
+---
+
+## Auto Mode — Hands-Free Bot Invites
+
+Auto mode watches your Google Calendar and **automatically prompts you to invite FocusBot** whenever a meeting with a Google Meet link is about to start.
+
+### How It Works
+
+1. You run `python3 main.py --auto`
+2. The watcher polls your Google Calendar every 30 seconds
+3. When a meeting is starting (within 2 minutes), a **macOS popup** appears:
+   ```
+   Meeting: Sprint Sync
+   starts in 1 min
+
+   Join & invite FocusBot to track focus?
+
+   [Skip]  [Invite FocusBot]
+   ```
+4. Click **"Invite FocusBot"** → the bot joins the meeting, tracking starts
+5. Click **"Skip"** → that meeting is skipped, watcher continues watching
+6. When the meeting ends, summary is saved and the watcher goes back to watching for the next meeting
+
+### Start Auto Mode
+
+```
+python3 main.py --auto
+```
+
+### Auto Mode Settings
+
+| Setting | What it controls | Default |
+|---------|-----------------|---------|
+| `AUTO_JOIN_LEAD_MINUTES` | How many minutes before meeting start to show the prompt | `2` |
+| `CALENDAR_POLL_INTERVAL` | How often (seconds) to check the calendar | `30` |
+
+### Requirements
+
+- Auto mode requires Google OAuth2 credentials (`credentials.json`)
+- Works without `ENABLE_GOOGLE_CALENDAR=true` — auto mode enables Calendar reading automatically
+- Still requires `LLM_API_KEY` and `VEXA_API_KEY`
+
+---
+
 ## Quick Reference
 
 | Action | Command |
 |--------|---------|
-| Start the tracker | `python3 main.py` |
+| Start the tracker (manual) | `python3 main.py` |
+| Start the tracker (auto) | `python3 main.py --auto` |
 | Stop the tracker | `Ctrl + C` |
 | Run tests | `python3 -m pytest tests/ -v` |
+| Query meeting history | `python3 query.py all` |
 | View past meeting memory | `cat ~/.meeting_focus_tracker/meeting_history.json` |
 | Delete all memory | `rm ~/.meeting_focus_tracker/meeting_history.json` |
 | Edit settings | `open -e .env` |
