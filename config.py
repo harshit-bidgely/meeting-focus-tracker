@@ -21,6 +21,11 @@ class Config:
     DEVIATION_THRESHOLD: int = int(os.getenv("DEVIATION_THRESHOLD", "2"))
     ALERT_COOLDOWN: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "180"))
     CALENDAR_DESCRIPTION: str = os.getenv("CALENDAR_DESCRIPTION", "")
+    MEMORY_STORAGE_PATH: str = os.getenv(
+        "MEMORY_STORAGE_PATH",
+        os.path.join(os.path.expanduser("~"), ".meeting_focus_tracker", "meeting_history.json"),
+    )
+    MEMORY_SIMILARITY_THRESHOLD: float = float(os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.55"))
 
     @classmethod
     def validate(cls) -> list[str]:

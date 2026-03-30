@@ -53,6 +53,13 @@ class VexaClient:
         logger.info("Chat sent: %s", data)
         return data
 
+    def get_bot_status(self) -> list[dict]:
+        """GET /bots/status — check running bots."""
+        url = f"{self.api_base}/bots/status"
+        resp = requests.get(url, headers=self.headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("running_bots", [])
+
     def stop_bot(self, platform: str, meeting_id: str) -> None:
         """DELETE /bots/{platform}/{meeting_id} — remove bot from meeting."""
         url = f"{self.api_base}/bots/{platform}/{meeting_id}"

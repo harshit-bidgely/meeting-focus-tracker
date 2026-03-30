@@ -14,6 +14,27 @@ class LLMClient:
         self.client = OpenAI(api_key=api_key, base_url=api_base)
         self.model = model
 
+    @staticmethod
+    def _repair_json(text: str) -> str:
+        """Best-effort repair of truncated or malformed JSON from the LLM."""
+        # Remove control characters inside string values (tabs, literal newlines)
+        # that break strict JSON parsing — replace with spaces
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', text)
+
+        # If JSON appears truncated (no closing brace), try to close it
+        if text.count('{') > text.count('}'):
+            # Truncated inside a string value — close the string and objects
+            # Find if we're inside a string (odd number of unescaped quotes)
+            in_string = False
+            for i, ch in enumerate(text):
+                if ch == '"' and (i == 0 or text[i-1] != '\\'):
+                    in_string = not in_string
+            if in_string:
+                text += '"'
+            # Close any open braces
+            text += '}' * (text.count('{') - text.count('}'))
+        return text
+
     def call(self, system_prompt: str, user_message: str, max_tokens: int = 1024) -> dict:
         """Send a system + user message and return parsed JSON. Retries once on rate limit."""
         logger.debug("LLM call — model=%s, max_tokens=%d", self.model, max_tokens)
@@ -43,8 +64,22 @@ class LLMClient:
         cleaned = re.sub(r"\s*```$", "", cleaned)
         cleaned = cleaned.strip()
 
+        # Try strict parse first, then lenient with repair
         try:
             return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Attempt 2: strict=False allows control characters in strings
+        try:
+            return json.loads(cleaned, strict=False)
+        except json.JSONDecodeError:
+            pass
+
+        # Attempt 3: repair truncated/malformed JSON then parse
+        try:
+            repaired = self._repair_json(cleaned)
+            return json.loads(repaired, strict=False)
         except json.JSONDecodeError as exc:
             logger.error("Failed to parse LLM JSON response: %s", cleaned[:300])
             raise ValueError(

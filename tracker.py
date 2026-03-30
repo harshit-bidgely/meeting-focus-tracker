@@ -5,10 +5,14 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
+import re as _re
+
 from config import Config
 from prompts.agenda_extractor import AGENDA_EXTRACTOR_SYSTEM
 from prompts.focus_tracker import FOCUS_TRACKER_SYSTEM, build_user_message
+from prompts.repetition_detector import build_repetition_suffix
 from services.llm_client import LLMClient
+from services.meeting_memory import MeetingMemory
 from services.transcript_cleaner import clean_segments, count_meaningful_words
 from services.vexa_client import VexaClient
 
@@ -33,6 +37,8 @@ class MeetingState:
     deviation_counter: float = 0.0
     last_alert_time: float = 0.0
     cycle_count: int = 0
+    had_transcript: bool = False          # True once we've seen real transcript
+    empty_cycles_since_data: int = 0      # consecutive empty cycles after data
 
 
 class MeetingFocusTracker:
@@ -41,8 +47,11 @@ class MeetingFocusTracker:
     def __init__(self) -> None:
         self.vexa = VexaClient(api_base=Config.VEXA_API_BASE, api_key=Config.VEXA_API_KEY)
         self.llm = LLMClient(api_key=Config.LLM_API_KEY, model=Config.LLM_MODEL, api_base=Config.LLM_API_BASE)
+        self.memory = MeetingMemory(storage_path=Config.MEMORY_STORAGE_PATH)
         self.state = MeetingState()
         self.agenda_formatted: str = ""
+        self.agenda_items: list[str] = []
+        self.past_context: str = ""
         self.platform: str = Config.MEETING_PLATFORM
         self.meeting_id: str = Config.MEETING_ID
 
@@ -64,7 +73,30 @@ class MeetingFocusTracker:
             return ""
         formatted = result.get("formatted", "")
         logger.info("Agenda extracted:\n%s", formatted)
+
+        # Parse individual topic strings for memory matching
+        self.agenda_items = [
+            _re.sub(r"^\d+\.\s*", "", line).strip().split("(")[0].strip()
+            for line in formatted.split("\n")
+            if line.strip()
+        ]
         return formatted
+
+    def load_past_context(self) -> None:
+        """Query meeting memory for related past meetings and build context string."""
+        if not self.agenda_items:
+            return
+        related = self.memory.find_related_meetings(
+            self.agenda_items,
+            max_results=3,
+            threshold=Config.MEMORY_SIMILARITY_THRESHOLD,
+        )
+        if related:
+            raw_context = self.memory.build_context_summary(related)
+            self.past_context = build_repetition_suffix(raw_context)
+            logger.info("Found %d related past meetings", len(related))
+        else:
+            logger.info("No related past meetings found")
 
     # ------------------------------------------------------------------
     # Step 2: fetch new transcript chunk
@@ -96,11 +128,12 @@ class MeetingFocusTracker:
             rolling_summary=self.state.rolling_summary,
             current_item=self.state.current_agenda_item,
             new_transcript=new_transcript,
+            past_context=self.past_context,
         )
         return self.llm.call(
             system_prompt=FOCUS_TRACKER_SYSTEM,
             user_message=user_msg,
-            max_tokens=1024,
+            max_tokens=2048,
         )
 
     # ------------------------------------------------------------------
@@ -200,6 +233,9 @@ class MeetingFocusTracker:
             print("No agenda could be extracted from the calendar description. Exiting.")
             return
 
+        # 1b. Load past meeting context
+        self.load_past_context()
+
         # 2. Startup banner
         print("\n" + "=" * 60)
         print("  MEETING FOCUS TRACKER")
@@ -213,7 +249,17 @@ class MeetingFocusTracker:
         print("  AGENDA:")
         for line in self.agenda_formatted.split("\n"):
             print(f"    {line}")
+        if self.past_context:
+            print("-" * 60)
+            print("  MEMORY: Found related previous meetings")
         print("=" * 60 + "\n")
+
+        # 2b. Request bot to join
+        try:
+            self.vexa.start_bot(self.platform, self.meeting_id)
+            print("  Bot join requested — admit 'FocusBot' in Google Meet when it appears\n")
+        except Exception as e:
+            logger.warning("Bot join request failed (may already be in meeting): %s", e)
 
         # 3. Infinite loop
         try:
@@ -229,8 +275,21 @@ class MeetingFocusTracker:
                     # b. Skip if not enough data
                     if count_meaningful_words(new_transcript) < 5:
                         print(f"[Cycle {cycle}] -- Insufficient new transcript, skipping analysis")
+                        # Track empty cycles after we've had real data
+                        if self.state.had_transcript:
+                            self.state.empty_cycles_since_data += 1
+                            if self.state.empty_cycles_since_data >= 3:
+                                print(f"\n[Cycle {cycle}] Meeting appears to have ended (no new transcript for {self.state.empty_cycles_since_data} cycles)")
+                                print("Saving meeting to memory...")
+                                self._save_to_memory()
+                                print("Meeting saved. Exiting.")
+                                return
                         self._sleep_remaining(cycle_start)
                         continue
+
+                    # Reset empty cycle counter when we get data
+                    self.state.had_transcript = True
+                    self.state.empty_cycles_since_data = 0
 
                     # c. Analyse
                     result = self.analyze(new_transcript)
@@ -256,9 +315,16 @@ class MeetingFocusTracker:
                         print(f"    {line[:100]}")
                     if len(new_transcript.split("\n")) > 5:
                         print(f"    ... (+{len(new_transcript.split(chr(10))) - 5} more lines)")
+                    rep_detected = result.get("repetition_detected", False)
+                    rep_note = result.get("repetition_note")
+                    if rep_detected and rep_note:
+                        print(f"  REPEAT     : {rep_note}")
+                    elif rep_note:
+                        print(f"  PROGRESS   : {rep_note}")
                     print(f"  ── Rolling Summary ──")
-                    for line in summary.split("\\n"):
-                        print(f"    {line}")
+                    for line in summary.replace("\\n", "\n").split("\n"):
+                        if line.strip():
+                            print(f"    {line.strip()}")
                     print(f"{'─'*60}")
 
                     # e. State update
@@ -276,7 +342,37 @@ class MeetingFocusTracker:
                 self._sleep_remaining(cycle_start)
 
         except KeyboardInterrupt:
-            print("\nStopping focus tracker. Goodbye!")
+            print("\nSaving meeting to memory...")
+            self._save_to_memory()
+            print("Stopping focus tracker. Goodbye!")
+
+    def _save_to_memory(self) -> None:
+        """Persist current meeting summary to local memory."""
+        from datetime import datetime, timezone
+        try:
+            summary = self.state.rolling_summary
+            decisions = []
+            open_items = []
+            for line in summary.replace("\\n", "\n").split("\n"):
+                lower = line.lower()
+                if "done:" in lower or "decided" in lower:
+                    decisions.append(line.strip())
+                elif "not_started" in lower or "pending" in lower or "tbd" in lower:
+                    open_items.append(line.strip())
+
+            self.memory.save_meeting(
+                meeting_id=self.meeting_id,
+                date=datetime.now(timezone.utc).isoformat(),
+                agenda_raw=self.agenda_formatted,
+                agenda_items=self.agenda_items,
+                final_summary=summary,
+                decisions=decisions,
+                open_items=open_items,
+                deviation_count=int(self.state.deviation_counter),
+            )
+            logger.info("Meeting saved to memory")
+        except Exception:
+            logger.exception("Failed to save meeting to memory")
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""

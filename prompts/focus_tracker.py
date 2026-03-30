@@ -60,8 +60,17 @@ Return ONLY valid JSON. No markdown, no preamble.
   "reason": "one sentence",
   "suggestion": "max 25 words or null if on_track/insufficient_data",
   "updated_summary": "Narrative: ...\\n\\n[1. Item] status: ...",
-  "current_agenda_item_number": integer_or_null
+  "current_agenda_item_number": integer_or_null,
+  "repetition_detected": true_or_false,
+  "repetition_note": "what is being repeated, or progress note, or null"
 }
+
+## REPETITION DETECTION
+If PAST MEETING CONTEXT is present in the user message, check whether the current
+discussion is repeating topics from previous meetings without new substance.
+- If repeating same points with no new decisions/info: set "repetition_detected": true and explain in "repetition_note"
+- If progressing (building on previous decisions, new info): set "repetition_detected": false, "repetition_note": "Building on [previous decision]"
+- If no past context or not applicable: "repetition_detected": false, "repetition_note": null
 
 ## EDGE CASES
 1. Meeting just started (empty summary, null item): grace period, classify setup as on_track.
@@ -78,9 +87,10 @@ def build_user_message(
     rolling_summary: str,
     current_item: int | None,
     new_transcript: str,
+    past_context: str = "",
 ) -> str:
     """Build the user message for the focus tracker prompt."""
-    return f"""AGENDA:
+    msg = f"""AGENDA:
 {agenda}
 
 ROLLING_SUMMARY:
@@ -91,3 +101,7 @@ CURRENT_AGENDA_ITEM:
 
 NEW_TRANSCRIPT:
 {new_transcript}"""
+
+    if past_context:
+        msg += f"\n\n{past_context}"
+    return msg
