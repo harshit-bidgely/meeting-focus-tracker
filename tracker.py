@@ -4,11 +4,17 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from config import Config
 from prompts.agenda_extractor import AGENDA_EXTRACTOR_SYSTEM
 from prompts.focus_tracker import FOCUS_TRACKER_SYSTEM, build_user_message
+from prompts.meeting_email import MEETING_EMAIL_SYSTEM, build_email_user_message
+from services.email_client import EmailClient
+from services.email_formatter import format_email_html, format_email_text
+from services.history_store import HistoryStore
 from services.llm_client import LLMClient
+from services.participant_tracker import ParticipantTracker
 from services.transcript_cleaner import clean_segments, count_meaningful_words
 from services.vexa_client import VexaClient
 
@@ -25,14 +31,32 @@ LEVEL_ICONS = {
 
 @dataclass
 class MeetingState:
-    """All state that persists across cycles."""
+    """All state that persists across cycles.
 
+    Existing fields are unchanged for full backward compatibility.
+    New fields use defaults so existing code that constructs MeetingState()
+    without arguments continues to work.
+    """
+
+    # ── Existing fields (do NOT rename or remove) ─────────────────────────
     rolling_summary: str = ""
     current_agenda_item: int | None = None
     last_segment_timestamp: str | None = None
     deviation_counter: float = 0.0
     last_alert_time: float = 0.0
     cycle_count: int = 0
+
+    # ── New fields added for email/analytics (backward-compatible defaults) ─
+    # Accumulated cleaned transcript lines across all cycles (for email generation)
+    full_transcript_lines: list[str] = field(default_factory=list)
+    # Per-participant contribution tracker
+    participant_tracker: ParticipantTracker = field(default_factory=ParticipantTracker)
+    # Deviation cycle counters for efficiency scoring
+    on_track_cycles: int = 0
+    tangential_cycles: int = 0
+    off_topic_cycles: int = 0
+    # ISO timestamp when the meeting started (set on first transcript fetch)
+    meeting_start_time: str | None = None
 
 
 class MeetingFocusTracker:
@@ -45,6 +69,12 @@ class MeetingFocusTracker:
         self.agenda_formatted: str = ""
         self.platform: str = Config.MEETING_PLATFORM
         self.meeting_id: str = Config.MEETING_ID
+
+        # History store (persists meeting reports across sessions)
+        history_kwargs = {}
+        if Config.HISTORY_DIR:
+            history_kwargs["history_dir"] = Config.HISTORY_DIR
+        self.history_store = HistoryStore(**history_kwargs)
 
     # ------------------------------------------------------------------
     # Step 1: agenda extraction (runs once)
@@ -71,19 +101,52 @@ class MeetingFocusTracker:
     # ------------------------------------------------------------------
 
     def fetch_new_transcript(self) -> str:
-        """Fetch transcript from Vexa, clean, and return new text since last poll."""
+        """Fetch transcript from Vexa, clean, and return new text since last poll.
+
+        Also records raw segments into the participant tracker and accumulates
+        cleaned lines for end-of-meeting email generation.
+        The return type and existing behaviour are unchanged.
+        """
         data = self.vexa.get_transcript(self.platform, self.meeting_id)
         segments = data.get("segments", [])
         if not segments:
             logger.debug("No segments returned from Vexa")
             return ""
 
+        # ── NEW: record raw segments into participant tracker ────────────
+        self._record_participant_data(segments)
+
         cleaned_text, latest_ts = clean_segments(
             segments, after_timestamp=self.state.last_segment_timestamp
         )
         if latest_ts:
             self.state.last_segment_timestamp = latest_ts
+            if self.state.meeting_start_time is None:
+                self.state.meeting_start_time = latest_ts
+
+        # ── NEW: accumulate cleaned lines for full-transcript email ──────
+        if cleaned_text:
+            self.state.full_transcript_lines.extend(cleaned_text.split("\n"))
+
         return cleaned_text
+
+    def _record_participant_data(self, segments: list[dict]) -> None:
+        """Record raw Vexa segments into the participant tracker.
+
+        Only processes segments newer than last_segment_timestamp (same filter
+        logic as clean_segments) so we don't double-count across cycles.
+        """
+        after_ts = self.state.last_segment_timestamp
+        for seg in segments:
+            ts = seg.get("absolute_start_time", "")
+            text = seg.get("text", "").strip()
+            speaker = seg.get("speaker") or "Unknown"
+            if not text:
+                continue
+            # Apply the same timestamp filter used by clean_segments
+            if after_ts and ts and ts <= after_ts:
+                continue
+            self.state.participant_tracker.record_segment(speaker, text, ts)
 
     # ------------------------------------------------------------------
     # Step 3: LLM analysis
@@ -117,11 +180,15 @@ class MeetingFocusTracker:
         level = result.get("deviation_level", "insufficient_data")
         if level == "off_topic":
             self.state.deviation_counter += 1
+            self.state.off_topic_cycles += 1
         elif level == "tangential":
             self.state.deviation_counter += 0.5
+            self.state.tangential_cycles += 1
         else:
             # on_track or insufficient_data → full reset
             self.state.deviation_counter = 0
+            if level == "on_track":
+                self.state.on_track_cycles += 1
 
         logger.debug(
             "State updated — item=%s, deviation_counter=%.1f",
@@ -187,6 +254,161 @@ class MeetingFocusTracker:
         print(f"{'='*60}\n")
         self.state.last_alert_time = now
         return True
+
+    # ------------------------------------------------------------------
+    # Post-meeting email generation
+    # ------------------------------------------------------------------
+
+    def generate_meeting_report(self) -> dict:
+        """Call the LLM to generate a structured post-meeting email JSON.
+
+        Gathers all accumulated state (participant stats, full transcript,
+        deviation stats, history) and sends it to the email-generation prompt.
+
+        Returns the parsed JSON dict from the LLM.
+        """
+        participant_stats = self.state.participant_tracker.to_dict()
+        full_transcript = "\n".join(self.state.full_transcript_lines)
+        deviation_stats = {
+            "total_cycles": self.state.cycle_count,
+            "on_track_cycles": self.state.on_track_cycles,
+            "tangential_cycles": self.state.tangential_cycles,
+            "off_topic_cycles": self.state.off_topic_cycles,
+        }
+        previous_meetings = self.history_store.get_previous_meetings(
+            self.meeting_id or "unknown"
+        )
+        meeting_date = (
+            self.state.meeting_start_time[:10]
+            if self.state.meeting_start_time
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
+        meeting_meta = {
+            "meeting_id": self.meeting_id or "unknown",
+            "platform": self.platform,
+            "date": meeting_date,
+            "total_cycles": self.state.cycle_count,
+        }
+
+        user_msg = build_email_user_message(
+            agenda=self.agenda_formatted,
+            full_transcript=full_transcript,
+            participant_stats=participant_stats,
+            rolling_summary=self.state.rolling_summary,
+            deviation_stats=deviation_stats,
+            previous_meetings=previous_meetings,
+            meeting_meta=meeting_meta,
+        )
+
+        logger.info("Generating post-meeting email report via LLM…")
+        try:
+            report = self.llm.call(
+                system_prompt=MEETING_EMAIL_SYSTEM,
+                user_message=user_msg,
+                max_tokens=4096,
+            )
+        except Exception:
+            logger.exception("LLM call for email generation failed")
+            report = {}
+
+        return report
+
+    def send_meeting_email(self, report: dict) -> bool:
+        """Format *report* as HTML + text and send via SMTP.
+
+        Returns True if the email was dispatched successfully or if email
+        is intentionally disabled (SMTP_HOST not configured).
+        Saving the report to the history store is always attempted regardless
+        of whether the email send succeeds.
+        """
+        meeting_date = (
+            self.state.meeting_start_time[:10]
+            if self.state.meeting_start_time
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
+        meeting_meta = {
+            "meeting_id": self.meeting_id or "unknown",
+            "platform": self.platform,
+            "date": meeting_date,
+            "total_cycles": self.state.cycle_count,
+        }
+
+        # ── Always save to history store ────────────────────────────────
+        history_payload = dict(report)
+        history_payload["meeting_meta"] = meeting_meta
+        history_payload["participant_stats"] = self.state.participant_tracker.to_dict()
+        history_payload["deviation_stats"] = {
+            "total_cycles": self.state.cycle_count,
+            "on_track_cycles": self.state.on_track_cycles,
+            "tangential_cycles": self.state.tangential_cycles,
+            "off_topic_cycles": self.state.off_topic_cycles,
+        }
+        try:
+            self.history_store.save_meeting(self.meeting_id or "unknown", history_payload)
+        except Exception:
+            logger.exception("Failed to save meeting to history store")
+
+        # ── Skip email send if SMTP is not configured ───────────────────
+        if not Config.email_enabled():
+            logger.info(
+                "Email not configured (SMTP_HOST / EMAIL_SENDER / EMAIL_RECIPIENTS missing). "
+                "Report saved to history store only."
+            )
+            return True
+
+        html_body = format_email_html(report, meeting_meta)
+        text_body = format_email_text(report, meeting_meta)
+
+        subject = (
+            f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
+        )
+
+        client = EmailClient(
+            smtp_host=Config.SMTP_HOST,
+            smtp_port=Config.SMTP_PORT,
+            smtp_user=Config.SMTP_USER,
+            smtp_password=Config.SMTP_PASSWORD,
+            sender_email=Config.EMAIL_SENDER,
+            use_tls=Config.SMTP_USE_TLS,
+            use_ssl=Config.SMTP_USE_SSL,
+        )
+        return client.send(
+            to_emails=Config.EMAIL_RECIPIENTS,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+        )
+
+    def _run_post_meeting_pipeline(self) -> None:
+        """Generate and send the post-meeting email report.
+
+        Called automatically when the main loop exits (KeyboardInterrupt).
+        All errors are caught so they never mask the graceful-exit message.
+        """
+        if self.state.cycle_count == 0:
+            logger.info("No cycles completed — skipping post-meeting report")
+            return
+
+        print("\n" + "=" * 60)
+        print("  Generating post-meeting intelligence report…")
+        print("=" * 60)
+
+        report = self.generate_meeting_report()
+        if not report:
+            print("  Report generation failed. Check logs.")
+            return
+
+        sent = self.send_meeting_email(report)
+
+        if Config.email_enabled():
+            status = "sent" if sent else "failed (check logs)"
+            print(f"  Email report: {status}")
+            if sent:
+                print(f"  Recipients : {', '.join(Config.EMAIL_RECIPIENTS)}")
+        else:
+            print("  Email not configured — report saved to history store only.")
+
+        print("=" * 60 + "\n")
 
     # ------------------------------------------------------------------
     # Main loop
@@ -277,6 +499,7 @@ class MeetingFocusTracker:
 
         except KeyboardInterrupt:
             print("\nStopping focus tracker. Goodbye!")
+            self._run_post_meeting_pipeline()
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""
