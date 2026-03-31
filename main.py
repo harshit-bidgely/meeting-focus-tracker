@@ -145,9 +145,8 @@ def _run_manual_mode() -> None:
     # Set Config values for tracker initialization
     Config.MEETING_ID = meeting_id
 
-    # Temporarily store Google credentials for tracker to use (if supported)
-    # The tracker can access these through module-level storage if needed
-    tracker = MeetingFocusTracker()
+    # Create tracker with Google credentials for Gmail API email sending
+    tracker = MeetingFocusTracker(google_creds=google_creds)
     tracker.run(description)
 
 

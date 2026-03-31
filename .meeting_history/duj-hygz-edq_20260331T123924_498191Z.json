@@ -1,0 +1,36 @@
+{
+  "meeting_overview": {
+    "title": "Hackathon Idea Discussion and Demonstration",
+    "date": "2026-03-31",
+    "duration_minutes": 25,
+    "participants_count": 1,
+    "meeting_health": "good",
+    "strategic_value": "medium",
+    "narrative": "Shivank Bhardwaj demonstrated an alternative version of the published hackathon idea, explaining its configurability and showing its features. The discussion focused on the manual and time-consuming process of Jetcans, prompting Shivank to explore building an integrated solution."
+  },
+  "meeting_meta": {
+    "meeting_id": "duj-hygz-edq",
+    "platform": "google_meet",
+    "date": "2026-03-31",
+    "total_cycles": 7
+  },
+  "participant_stats": {
+    "Shivank Bhardwaj": {
+      "name": "Shivank Bhardwaj",
+      "word_count": 191,
+      "segment_count": 8,
+      "word_share_pct": 100.0,
+      "participation_level": "Medium",
+      "first_seen": "2026-03-31T12:36:20.799868Z",
+      "last_seen": "2026-03-31T12:39:05.209868Z"
+    }
+  },
+  "deviation_stats": {
+    "total_cycles": 7,
+    "on_track_cycles": 2,
+    "tangential_cycles": 1,
+    "off_topic_cycles": 0
+  },
+  "meeting_id": "duj-hygz-edq",
+  "saved_at": "20260331T123924_498191Z"
+}

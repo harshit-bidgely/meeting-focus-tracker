@@ -14,6 +14,7 @@ from prompts.meeting_email_professional import MEETING_EMAIL_PROFESSIONAL, build
 from services.email_client import EmailClient
 from services.email_formatter import format_email_html, format_email_text
 from services.email_formatter_professional import format_professional_html, format_professional_text
+from services.gmail_client import GmailClient
 from services.history_store import HistoryStore
 from services.llm_client import LLMClient
 from services.participant_tracker import ParticipantTracker
@@ -66,13 +67,14 @@ class MeetingState:
 class MeetingFocusTracker:
     """Main orchestrator — extracts agenda, polls transcript, analyses focus, sends alerts."""
 
-    def __init__(self) -> None:
+    def __init__(self, google_creds=None) -> None:
         self.vexa = VexaClient(api_base=Config.VEXA_API_BASE, api_key=Config.VEXA_API_KEY)
         self.llm = LLMClient(api_key=Config.LLM_API_KEY, model=Config.LLM_MODEL, api_base=Config.LLM_API_BASE)
         self.state = MeetingState()
         self.agenda_formatted: str = ""
         self.platform: str = Config.MEETING_PLATFORM
         self.meeting_id: str = Config.MEETING_ID
+        self.google_creds = google_creds  # Store Google credentials for email sending
 
         # History store (persists meeting reports across sessions)
         history_kwargs = {}
@@ -318,8 +320,12 @@ class MeetingFocusTracker:
 
         return report
 
-    def send_meeting_email(self, report: dict) -> bool:
-        """Format *report* as HTML + text and send via SMTP.
+    def send_meeting_email(self, report: dict, google_creds=None) -> bool:
+        """Format *report* as HTML + text and send via Gmail API or SMTP.
+
+        Args:
+            report: Meeting intelligence report dict
+            google_creds: Optional Google OAuth credentials for Gmail API
 
         Returns True if the email was dispatched successfully or if email
         is intentionally disabled (SMTP_HOST not configured).
@@ -353,11 +359,36 @@ class MeetingFocusTracker:
         except Exception:
             logger.exception("Failed to save meeting to history store")
 
-        # ── Skip email send if SMTP is not configured ───────────────────
+        # ── Try Gmail API first if Google credentials available ───────────
+        if google_creds:
+            try:
+                html_body = format_professional_html(report, meeting_meta)
+                text_body = format_professional_text(report, meeting_meta)
+                subject = (
+                    f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
+                )
+
+                gmail_client = GmailClient(google_creds)
+                success = gmail_client.send_email(
+                    to_addresses=Config.EMAIL_RECIPIENTS or [],
+                    subject=subject,
+                    html_content=html_body,
+                    text_content=text_body,
+                )
+                if success:
+                    logger.info("Email sent successfully via Gmail API")
+                    print("  Email report: sent via Gmail API")
+                    return True
+                else:
+                    logger.warning("Gmail API send failed, falling back to SMTP")
+            except Exception as e:
+                logger.warning(f"Gmail API error: {e}, falling back to SMTP")
+
+        # ── Fall back to SMTP if Gmail API failed or not available ────────
         if not Config.email_enabled():
             logger.info(
-                "Email not configured (SMTP_HOST / EMAIL_SENDER / EMAIL_RECIPIENTS missing). "
-                "Report saved to history store only."
+                "Email not configured (SMTP_HOST / EMAIL_SENDER / EMAIL_RECIPIENTS missing "
+                "and no Google credentials). Report saved to history store only."
             )
             return True
 
@@ -403,9 +434,9 @@ class MeetingFocusTracker:
             print("  Report generation failed. Check logs.")
             return
 
-        sent = self.send_meeting_email(report)
+        sent = self.send_meeting_email(report, google_creds=self.google_creds)
 
-        if Config.email_enabled():
+        if Config.email_enabled() or self.google_creds:
             status = "sent" if sent else "failed (check logs)"
             print(f"  Email report: {status}")
             if sent:

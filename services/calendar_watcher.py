@@ -390,7 +390,7 @@ class CalendarWatcher:
             # Set Config values for tracker initialization
             Config.MEETING_ID = event.meet_id
 
-            tracker = MeetingFocusTracker()
+            tracker = MeetingFocusTracker(google_creds=self.google_creds)
             tracker.run(description)
         except Exception:
             logger.exception("Tracker crashed for %s", event.meet_id)
