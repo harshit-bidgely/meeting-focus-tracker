@@ -18,6 +18,7 @@ from services.gmail_client import GmailClient
 from services.history_store import HistoryStore
 from services.llm_client import LLMClient
 from services.participant_tracker import ParticipantTracker
+from services.thread_store import save_meeting_to_thread, find_matching_thread
 from services.transcript_cleaner import clean_segments, count_meaningful_words
 from services.vexa_client import VexaClient
 
@@ -368,6 +369,35 @@ class MeetingFocusTracker:
             self.history_store.save_meeting(self.meeting_id or "unknown", history_payload)
         except Exception:
             logger.exception("Failed to save meeting to history store")
+
+        # ── Save to thread store (groups meetings by similar agenda) ────
+        # Meetings with similar agendas are clustered into a single thread
+        # so you can track progress across recurring standups, sprints, etc.
+        if self.agenda_formatted:
+            try:
+                agenda_items = [
+                    item.get("topic", "") if isinstance(item, dict) else str(item)
+                    for item in report.get("agenda_items", [])
+                ]
+                existing_thread = find_matching_thread(self.agenda_formatted)
+                if existing_thread:
+                    import os
+                    thread_name = os.path.basename(existing_thread)
+                    logger.info("Linking meeting to existing thread: %s", thread_name)
+                    print(f"  Thread      : linked to '{thread_name}' (similar agenda)")
+                else:
+                    print(f"  Thread      : new thread created for this agenda")
+
+                save_meeting_to_thread(
+                    meeting_id=self.meeting_id or "unknown",
+                    agenda=self.agenda_formatted,
+                    agenda_items=agenda_items,
+                    summary=report,
+                    transcript=self.state.rolling_summary or "",
+                    rolling_summary=self.state.rolling_summary or "",
+                )
+            except Exception:
+                logger.exception("Failed to save meeting to thread store")
 
         # ── Resolve recipients: calendar attendees → Config fallback ────
         recipients: list[str] = (
