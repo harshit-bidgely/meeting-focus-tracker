@@ -10,8 +10,10 @@ from config import Config
 from prompts.agenda_extractor import AGENDA_EXTRACTOR_SYSTEM
 from prompts.focus_tracker import FOCUS_TRACKER_SYSTEM, build_user_message
 from prompts.meeting_email import MEETING_EMAIL_SYSTEM, build_email_user_message
+from prompts.meeting_email_professional import MEETING_EMAIL_PROFESSIONAL, build_professional_email_message
 from services.email_client import EmailClient
 from services.email_formatter import format_email_html, format_email_text
+from services.email_formatter_professional import format_professional_html, format_professional_text
 from services.history_store import HistoryStore
 from services.llm_client import LLMClient
 from services.participant_tracker import ParticipantTracker
@@ -290,7 +292,7 @@ class MeetingFocusTracker:
             "total_cycles": self.state.cycle_count,
         }
 
-        user_msg = build_email_user_message(
+        user_msg = build_professional_email_message(
             agenda=self.agenda_formatted,
             full_transcript=full_transcript,
             participant_stats=participant_stats,
@@ -298,17 +300,18 @@ class MeetingFocusTracker:
             deviation_stats=deviation_stats,
             previous_meetings=previous_meetings,
             meeting_meta=meeting_meta,
+            meeting_start_time=self.state.meeting_start_time,
         )
 
-        logger.info("Generating post-meeting email report via LLM…")
+        logger.info("Generating professional post-meeting intelligence report via LLM…")
         try:
             report = self.llm.call(
-                system_prompt=MEETING_EMAIL_SYSTEM,
+                system_prompt=MEETING_EMAIL_PROFESSIONAL,
                 user_message=user_msg,
-                max_tokens=4096,
+                max_tokens=8000,  # Much larger for comprehensive professional report
             )
         except Exception:
-            logger.exception("LLM call for email generation failed")
+            logger.exception("LLM call for professional email generation failed")
             report = {}
 
         return report
@@ -356,8 +359,8 @@ class MeetingFocusTracker:
             )
             return True
 
-        html_body = format_email_html(report, meeting_meta)
-        text_body = format_email_text(report, meeting_meta)
+        html_body = format_professional_html(report, meeting_meta)
+        text_body = format_professional_text(report, meeting_meta)
 
         subject = (
             f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
