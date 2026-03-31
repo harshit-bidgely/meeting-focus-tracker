@@ -121,11 +121,12 @@ class TestTrackerStateMachine:
         with patch.object(Config, "LLM_API_KEY", "test-key"), \
              patch.object(Config, "LLM_API_BASE", "https://api.groq.com/openai/v1"), \
              patch.object(Config, "VEXA_API_KEY", "test-key"), \
+             patch.object(Config, "MEETING_ID", "test-meeting"), \
              patch.object(Config, "MEETING_PLATFORM", "google_meet"), \
              patch.object(Config, "DEVIATION_THRESHOLD", 2), \
              patch.object(Config, "ALERT_COOLDOWN", 180), \
              patch.object(Config, "POLL_INTERVAL", 1):
-            tracker = MeetingFocusTracker(meeting_id="test-meeting")
+            tracker = MeetingFocusTracker()
         tracker.vexa = MagicMock()
         tracker.llm = MagicMock()
         return tracker
