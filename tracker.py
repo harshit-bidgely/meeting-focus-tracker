@@ -481,11 +481,27 @@ class MeetingFocusTracker:
                 cycle = self.state.cycle_count
 
                 try:
-                    # a. Check if bot is still in the meeting (every few cycles to avoid API spam)
-                    if cycle % 3 == 0:  # Check every 3rd cycle
-                        if not self._is_bot_still_in_meeting():
+                    # a. Check meeting state (every 3rd cycle to avoid API spam)
+                    if cycle % 3 == 0:
+                        meeting_state = self._detect_meeting_state()
+
+                        if meeting_state == "bot_kicked":
                             print(f"\n{'='*60}")
                             print(f"[Cycle {cycle}] BOT KICKED FROM MEETING")
+                            print(f"{'='*60}")
+                            print("Generating final report and sending email...")
+                            self._run_post_meeting_pipeline()
+                            return
+                        elif meeting_state == "empty_30s":
+                            print(f"\n{'='*60}")
+                            print(f"[Cycle {cycle}] MEETING EMPTY — No one in meeting for 30+ seconds")
+                            print(f"{'='*60}")
+                            print("Generating final report and sending email...")
+                            self._run_post_meeting_pipeline()
+                            return
+                        elif meeting_state == "meeting_ended":
+                            print(f"\n{'='*60}")
+                            print(f"[Cycle {cycle}] MEETING ENDED")
                             print(f"{'='*60}")
                             print("Generating final report and sending email...")
                             self._run_post_meeting_pipeline()
@@ -494,24 +510,13 @@ class MeetingFocusTracker:
                     # b. Fetch new transcript
                     new_transcript = self.fetch_new_transcript()
 
-                    # c. Check if meeting has ended (no new data for 30+ seconds)
-                    if count_meaningful_words(new_transcript) < 5:
-                        # No meaningful data this cycle
-                        if self.state.last_transcript_time > 0:
-                            seconds_since_last = time.time() - self.state.last_transcript_time
-                            if seconds_since_last > 30:
-                                print(f"\n{'='*60}")
-                                print(f"[Cycle {cycle}] MEETING ENDED — No activity for {int(seconds_since_last)}s")
-                                print(f"{'='*60}")
-                                print("Generating final report and sending email...")
-                                self._run_post_meeting_pipeline()
-                                return
+                    # c. If we got meaningful data, update the timestamp
+                    if count_meaningful_words(new_transcript) >= 5:
+                        self.state.last_transcript_time = time.time()
+                    else:
                         print(f"[Cycle {cycle}] -- Insufficient new transcript, skipping analysis")
                         self._sleep_remaining(cycle_start)
                         continue
-                    else:
-                        # Update last transcript time when we receive new meaningful data
-                        self.state.last_transcript_time = time.time()
 
                     # d. Analyse
                     result = self.analyze(new_transcript)
@@ -563,19 +568,41 @@ class MeetingFocusTracker:
     def _is_bot_still_in_meeting(self) -> bool:
         """Check if the bot is still running in the meeting.
 
-        Returns True if bot is still active, False if kicked out or meeting ended.
+        Returns True if bot is still active, False if kicked out.
+        Raises exception if meeting API is unreachable.
         """
+        running_bots = self.vexa.get_bot_status()
+        for bot in running_bots:
+            if (bot.get("platform") == self.platform and
+                bot.get("native_meeting_id") == self.meeting_id):
+                return True
+        return False
+
+    def _detect_meeting_state(self) -> str:
+        """Detect the current state of the meeting.
+
+        Returns:
+            "active" - Meeting is ongoing, bot is in it
+            "empty_30s" - No activity for 30+ seconds (meeting likely empty)
+            "bot_kicked" - Bot has been removed from meeting
+            "meeting_ended" - Vexa indicates meeting has ended
+        """
+        # First check if bot is still in meeting
         try:
-            # Try to fetch bot status - if we can't, we've likely been kicked
-            running_bots = self.vexa.get_bot_status()
-            for bot in running_bots:
-                if (bot.get("platform") == self.platform and
-                    bot.get("native_meeting_id") == self.meeting_id):
-                    return True
-            return False
-        except Exception:
-            # Any error checking status means we should exit
-            return False
+            if not self._is_bot_still_in_meeting():
+                return "bot_kicked"
+        except Exception as e:
+            logger.debug(f"Error checking bot status: {e}")
+            # If we can't check bot status, assume meeting ended
+            return "meeting_ended"
+
+        # Check if there's been activity
+        if self.state.last_transcript_time > 0:
+            seconds_since_last = time.time() - self.state.last_transcript_time
+            if seconds_since_last > 30:
+                return "empty_30s"
+
+        return "active"
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""
