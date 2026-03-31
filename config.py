@@ -49,13 +49,13 @@ class Config:
     HISTORY_DIR: str = os.getenv("HISTORY_DIR", "")
 
     # ── Google Workspace Integration (optional) ────────────────────────────────
-    GOOGLE_CREDENTIALS_FILE: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "")
-    GOOGLE_TOKEN_FILE: str = os.getenv("GOOGLE_TOKEN_FILE", "")
+    GOOGLE_CREDENTIALS_FILE: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    GOOGLE_TOKEN_FILE: str = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
     ENABLE_GOOGLE_CALENDAR: bool = os.getenv("ENABLE_GOOGLE_CALENDAR", "false").lower() == "true"
     ENABLE_GOOGLE_GMAIL: bool = os.getenv("ENABLE_GOOGLE_GMAIL", "false").lower() == "true"
     ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "false").lower() == "true"
     ENABLE_GOOGLE_CHAT: bool = os.getenv("ENABLE_GOOGLE_CHAT", "false").lower() == "true"
-    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "")
+    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
     CALENDAR_POLL_INTERVAL: int = int(os.getenv("CALENDAR_POLL_INTERVAL", "30"))
     AUTO_JOIN_LEAD_MINUTES: int = int(os.getenv("AUTO_JOIN_LEAD_MINUTES", "5"))
     REQUIRE_AGENDA_VALIDATION: bool = os.getenv("REQUIRE_AGENDA_VALIDATION", "false").lower() == "true"

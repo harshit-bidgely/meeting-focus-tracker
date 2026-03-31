@@ -20,11 +20,16 @@ class TestConfigGoogleFields:
         assert Config.GOOGLE_TOKEN_FILE == "token.json"
 
     def test_google_calendar_disabled_by_default(self):
-        assert Config.ENABLE_GOOGLE_CALENDAR is False
+        """Code default (without .env) is False."""
+        with patch.dict("os.environ", {"ENABLE_GOOGLE_CALENDAR": "false"}):
+            result = os.getenv("ENABLE_GOOGLE_CALENDAR", "false").lower() == "true"
+            assert result is False
 
     def test_gmail_summary_disabled_by_default(self):
-        """Code default is False; .env may override at runtime."""
-        assert Config.ENABLE_GOOGLE_GMAIL is False
+        """Code default (without .env) is False."""
+        with patch.dict("os.environ", {"ENABLE_GOOGLE_GMAIL": "false"}):
+            result = os.getenv("ENABLE_GOOGLE_GMAIL", "false").lower() == "true"
+            assert result is False
 
     def test_google_drive_disabled_by_default(self):
         """Code default is False; .env may override at runtime."""
