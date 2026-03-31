@@ -94,7 +94,7 @@ class TestMeetingExitScenarios:
     # ──────────────────────────────────────────────────────────────
 
     def test_detect_meeting_empty_after_30_seconds_no_activity(self):
-        """Detect when meeting is empty (no activity for 30+ seconds)."""
+        """Detect when meeting is empty (no activity across 3+ poll cycles / 90+ seconds)."""
         tracker = self._make_tracker()
 
         # Bot is still in meeting
@@ -106,8 +106,8 @@ class TestMeetingExitScenarios:
             }
         ]
 
-        # But no meaningful transcript for 30+ seconds
-        tracker.state.last_transcript_time = time.time() - 35  # 35 seconds ago
+        # No meaningful transcript for 600 seconds — way over any threshold
+        tracker.state.last_transcript_time = time.time() - 600
 
         state = tracker._detect_meeting_state()
         assert state == "empty_30s"
@@ -309,9 +309,9 @@ class TestMeetingExitEdgeCases:
         return tracker
 
     def test_exactly_30_seconds_should_not_trigger_empty(self):
-        """At exactly 30 seconds, meeting should not be considered empty.
+        """60 seconds of silence (below 3-cycle threshold) should NOT trigger empty.
 
-        The condition is > 30, so less than or equal to 30 seconds is safe.
+        The threshold is max(90, POLL_INTERVAL*3) so 60s is safely below it.
         """
         tracker = self._make_tracker()
 
@@ -323,14 +323,14 @@ class TestMeetingExitEdgeCases:
             }
         ]
 
-        # Set last transcript time to 29 seconds ago (safely before the 30s boundary)
-        tracker.state.last_transcript_time = time.time() - 29.0
+        # 60 seconds ago — still below the 90s minimum threshold
+        tracker.state.last_transcript_time = time.time() - 60.0
 
         state = tracker._detect_meeting_state()
-        assert state == "active"  # Should be active within 30 seconds
+        assert state == "active"  # Should still be active
 
     def test_over_30_seconds_should_trigger_empty(self):
-        """Over 30 seconds should trigger empty detection."""
+        """Over 90 seconds of silence (3+ poll cycles) should trigger empty detection."""
         tracker = self._make_tracker()
 
         tracker.vexa.get_bot_status.return_value = [
@@ -341,8 +341,8 @@ class TestMeetingExitEdgeCases:
             }
         ]
 
-        # 30.1 seconds ago
-        tracker.state.last_transcript_time = time.time() - 30.1
+        # 600 seconds ago — way over any threshold regardless of POLL_INTERVAL
+        tracker.state.last_transcript_time = time.time() - 600.0
 
         state = tracker._detect_meeting_state()
         assert state == "empty_30s"

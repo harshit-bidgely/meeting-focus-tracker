@@ -504,7 +504,16 @@ class MeetingFocusTracker:
                 cycle = self.state.cycle_count
 
                 try:
-                    # a. Check meeting state (every 3rd cycle to avoid API spam)
+                    # a. Fetch new transcript first so last_transcript_time is
+                    #    always current before the state check runs.
+                    new_transcript = self.fetch_new_transcript()
+
+                    # b. Update activity timestamp whenever we get real speech
+                    if count_meaningful_words(new_transcript) >= 5:
+                        self.state.last_transcript_time = time.time()
+
+                    # c. Check meeting state every 3rd cycle (avoids API spam).
+                    #    Runs AFTER transcript fetch so the timestamp is fresh.
                     if cycle % 3 == 0:
                         meeting_state = self._detect_meeting_state()
 
@@ -517,7 +526,7 @@ class MeetingFocusTracker:
                             return
                         elif meeting_state == "empty_30s":
                             print(f"\n{'='*60}")
-                            print(f"[Cycle {cycle}] MEETING EMPTY — No one in meeting for 30+ seconds")
+                            print(f"[Cycle {cycle}] MEETING EMPTY — No one in meeting for 90+ seconds")
                             print(f"{'='*60}")
                             print("Generating final report and sending email...")
                             self._run_post_meeting_pipeline()
@@ -530,13 +539,8 @@ class MeetingFocusTracker:
                             self._run_post_meeting_pipeline()
                             return
 
-                    # b. Fetch new transcript
-                    new_transcript = self.fetch_new_transcript()
-
-                    # c. If we got meaningful data, update the timestamp
-                    if count_meaningful_words(new_transcript) >= 5:
-                        self.state.last_transcript_time = time.time()
-                    else:
+                    # d. Skip analysis if not enough new speech
+                    if count_meaningful_words(new_transcript) < 5:
                         print(f"[Cycle {cycle}] -- Insufficient new transcript, skipping analysis")
                         self._sleep_remaining(cycle_start)
                         continue
@@ -619,10 +623,14 @@ class MeetingFocusTracker:
             # If we can't check bot status, assume meeting ended
             return "meeting_ended"
 
-        # Check if there's been activity
+        # Check if there's been activity.
+        # We require silence across at least 3 full poll cycles before declaring
+        # the meeting empty — this prevents a single quiet cycle from firing.
+        # Minimum is always 90 seconds regardless of poll interval setting.
+        empty_threshold = max(90, Config.POLL_INTERVAL * 3)
         if self.state.last_transcript_time > 0:
             seconds_since_last = time.time() - self.state.last_transcript_time
-            if seconds_since_last > 30:
+            if seconds_since_last > empty_threshold:
                 return "empty_30s"
 
         return "active"

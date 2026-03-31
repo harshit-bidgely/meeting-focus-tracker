@@ -26,6 +26,10 @@ class VexaClient:
         }
         logger.info("Starting bot for %s/%s", platform, meeting_id)
         resp = requests.post(url, json=payload, headers=self.headers, timeout=30)
+        if resp.status_code == 409:
+            # Bot already running in this meeting — not an error, just reuse it
+            logger.info("Bot already running in %s/%s (409 Conflict — reusing)", platform, meeting_id)
+            return {"status": "already_running", "meeting_id": meeting_id}
         resp.raise_for_status()
         data = resp.json()
         logger.info("Bot started: %s", data)
