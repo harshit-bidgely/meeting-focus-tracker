@@ -387,12 +387,10 @@ class CalendarWatcher:
 
         print(f"\n  [{event.meet_id}] Starting tracker for: {event.summary}")
         try:
-            tracker = MeetingFocusTracker(
-                meeting_id=event.meet_id,
-                google_creds=self.google_creds,
-                meeting_title=event.summary,
-                attendees=event.attendees,
-            )
+            # Set Config values for tracker initialization
+            Config.MEETING_ID = event.meet_id
+
+            tracker = MeetingFocusTracker()
             tracker.run(description)
         except Exception:
             logger.exception("Tracker crashed for %s", event.meet_id)
