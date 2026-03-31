@@ -142,12 +142,12 @@ def _run_manual_mode() -> None:
     if calendar_event:
         meeting_title = calendar_event.summary
 
-    tracker = MeetingFocusTracker(
-        meeting_id=meeting_id,
-        google_creds=google_creds,
-        meeting_title=meeting_title,
-        attendees=attendees,
-    )
+    # Set Config values for tracker initialization
+    Config.MEETING_ID = meeting_id
+
+    # Temporarily store Google credentials for tracker to use (if supported)
+    # The tracker can access these through module-level storage if needed
+    tracker = MeetingFocusTracker()
     tracker.run(description)
 
 

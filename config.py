@@ -48,6 +48,19 @@ class Config:
     # Defaults to .meeting_history/ next to the project root.
     HISTORY_DIR: str = os.getenv("HISTORY_DIR", "")
 
+    # ── Google Workspace Integration (optional) ────────────────────────────────
+    GOOGLE_CREDENTIALS_FILE: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "")
+    GOOGLE_TOKEN_FILE: str = os.getenv("GOOGLE_TOKEN_FILE", "")
+    ENABLE_GOOGLE_CALENDAR: bool = os.getenv("ENABLE_GOOGLE_CALENDAR", "false").lower() == "true"
+    ENABLE_GOOGLE_GMAIL: bool = os.getenv("ENABLE_GOOGLE_GMAIL", "false").lower() == "true"
+    ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "false").lower() == "true"
+    ENABLE_GOOGLE_CHAT: bool = os.getenv("ENABLE_GOOGLE_CHAT", "false").lower() == "true"
+    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "")
+    CALENDAR_POLL_INTERVAL: int = int(os.getenv("CALENDAR_POLL_INTERVAL", "30"))
+    AUTO_JOIN_LEAD_MINUTES: int = int(os.getenv("AUTO_JOIN_LEAD_MINUTES", "5"))
+    REQUIRE_AGENDA_VALIDATION: bool = os.getenv("REQUIRE_AGENDA_VALIDATION", "false").lower() == "true"
+    AGENDA_MIN_QUALITY: str = os.getenv("AGENDA_MIN_QUALITY", "good")
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return list of missing required config keys."""
@@ -64,3 +77,13 @@ class Config:
     def email_enabled(cls) -> bool:
         """Return True only when the minimum SMTP config is present."""
         return bool(cls.SMTP_HOST and cls.EMAIL_SENDER and cls.EMAIL_RECIPIENTS)
+
+    @classmethod
+    def google_enabled(cls) -> bool:
+        """Return True if any Google Workspace feature is enabled."""
+        return any([
+            cls.ENABLE_GOOGLE_CALENDAR,
+            cls.ENABLE_GOOGLE_GMAIL,
+            cls.ENABLE_GOOGLE_DRIVE,
+            cls.ENABLE_GOOGLE_CHAT,
+        ])
