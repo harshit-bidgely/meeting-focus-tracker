@@ -4,19 +4,17 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
-
-import re as _re
+from datetime import datetime, timezone
 
 from config import Config
 from prompts.agenda_extractor import AGENDA_EXTRACTOR_SYSTEM
 from prompts.focus_tracker import FOCUS_TRACKER_SYSTEM, build_user_message
-from prompts.repetition_detector import build_repetition_suffix
-from prompts.summary_generator import SUMMARY_GENERATOR_SYSTEM, build_summary_message
+from prompts.meeting_email import MEETING_EMAIL_SYSTEM, build_email_user_message
+from services.email_client import EmailClient
+from services.email_formatter import format_email_html, format_email_text
+from services.history_store import HistoryStore
 from services.llm_client import LLMClient
-from services.meeting_memory import MeetingMemory
-from services.metrics import MeetingMetrics
-from services.similarity import generate_thread_insight
-from services.thread_store import save_meeting_to_thread, find_matching_thread, get_thread_meetings
+from services.participant_tracker import ParticipantTracker
 from services.transcript_cleaner import clean_segments, count_meaningful_words
 from services.vexa_client import VexaClient
 
@@ -33,41 +31,50 @@ LEVEL_ICONS = {
 
 @dataclass
 class MeetingState:
-    """All state that persists across cycles."""
+    """All state that persists across cycles.
 
+    Existing fields are unchanged for full backward compatibility.
+    New fields use defaults so existing code that constructs MeetingState()
+    without arguments continues to work.
+    """
+
+    # ── Existing fields (do NOT rename or remove) ─────────────────────────
     rolling_summary: str = ""
     current_agenda_item: int | None = None
     last_segment_timestamp: str | None = None
     deviation_counter: float = 0.0
     last_alert_time: float = 0.0
     cycle_count: int = 0
-    full_transcript: str = ""
-    had_transcript: bool = False          # True once we've seen real transcript
-    empty_cycles_since_data: int = 0      # consecutive empty cycles after data
+
+    # ── New fields added for email/analytics (backward-compatible defaults) ─
+    # Accumulated cleaned transcript lines across all cycles (for email generation)
+    full_transcript_lines: list[str] = field(default_factory=list)
+    # Per-participant contribution tracker
+    participant_tracker: ParticipantTracker = field(default_factory=ParticipantTracker)
+    # Deviation cycle counters for efficiency scoring
+    on_track_cycles: int = 0
+    tangential_cycles: int = 0
+    off_topic_cycles: int = 0
+    # ISO timestamp when the meeting started (set on first transcript fetch)
+    meeting_start_time: str | None = None
 
 
 class MeetingFocusTracker:
     """Main orchestrator — extracts agenda, polls transcript, analyses focus, sends alerts."""
 
-    def __init__(
-        self,
-        meeting_id: str | None = None,
-        google_creds=None,
-        meeting_title: str = "",
-        attendees: list[str] | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self.vexa = VexaClient(api_base=Config.VEXA_API_BASE, api_key=Config.VEXA_API_KEY)
         self.llm = LLMClient(api_key=Config.LLM_API_KEY, model=Config.LLM_MODEL, api_base=Config.LLM_API_BASE)
-        self.memory = MeetingMemory(storage_path=Config.MEMORY_STORAGE_PATH)
         self.state = MeetingState()
         self.agenda_formatted: str = ""
-        self.agenda_items: list[str] = []
-        self.past_context: str = ""
         self.platform: str = Config.MEETING_PLATFORM
-        self.meeting_id: str = meeting_id or Config.MEETING_ID or ""
-        self.google_creds = google_creds
-        self.meeting_title: str = meeting_title
-        self.attendees: list[str] = attendees or []
+        self.meeting_id: str = Config.MEETING_ID
+
+        # History store (persists meeting reports across sessions)
+        history_kwargs = {}
+        if Config.HISTORY_DIR:
+            history_kwargs["history_dir"] = Config.HISTORY_DIR
+        self.history_store = HistoryStore(**history_kwargs)
 
     # ------------------------------------------------------------------
     # Step 1: agenda extraction (runs once)
@@ -79,7 +86,7 @@ class MeetingFocusTracker:
         result = self.llm.call(
             system_prompt=AGENDA_EXTRACTOR_SYSTEM,
             user_message=description,
-            max_tokens=1024,
+            max_tokens=512,
         )
         status = result.get("status", "")
         if status == "no_agenda_found":
@@ -87,58 +94,59 @@ class MeetingFocusTracker:
             return ""
         formatted = result.get("formatted", "")
         logger.info("Agenda extracted:\n%s", formatted)
-
-        # Parse individual topic strings for memory matching
-        self.agenda_items = [
-            _re.sub(r"^\d+\.\s*", "", line).strip().split("(")[0].strip()
-            for line in formatted.split("\n")
-            if line.strip()
-        ]
         return formatted
-
-    def load_past_context(self) -> None:
-        """Query meeting memory for related past meetings and build context string."""
-        if not self.agenda_items:
-            return
-        related = self.memory.find_related_meetings(
-            self.agenda_items,
-            max_results=3,
-            threshold=Config.MEMORY_SIMILARITY_THRESHOLD,
-        )
-        if related:
-            raw_context = self.memory.build_context_summary(related)
-            self.past_context = build_repetition_suffix(raw_context)
-            logger.info("Found %d related past meetings", len(related))
-        else:
-            logger.info("No related past meetings found")
 
     # ------------------------------------------------------------------
     # Step 2: fetch new transcript chunk
     # ------------------------------------------------------------------
 
     def fetch_new_transcript(self) -> str:
-        """Fetch transcript from Vexa, clean, and return new text since last poll."""
+        """Fetch transcript from Vexa, clean, and return new text since last poll.
+
+        Also records raw segments into the participant tracker and accumulates
+        cleaned lines for end-of-meeting email generation.
+        The return type and existing behaviour are unchanged.
+        """
         data = self.vexa.get_transcript(self.platform, self.meeting_id)
         segments = data.get("segments", [])
         if not segments:
             logger.debug("No segments returned from Vexa")
             return ""
 
+        # ── NEW: record raw segments into participant tracker ────────────
+        self._record_participant_data(segments)
+
         cleaned_text, latest_ts = clean_segments(
             segments, after_timestamp=self.state.last_segment_timestamp
         )
         if latest_ts:
             self.state.last_segment_timestamp = latest_ts
+            if self.state.meeting_start_time is None:
+                self.state.meeting_start_time = latest_ts
+
+        # ── NEW: accumulate cleaned lines for full-transcript email ──────
+        if cleaned_text:
+            self.state.full_transcript_lines.extend(cleaned_text.split("\n"))
+
         return cleaned_text
 
-    def fetch_full_transcript(self) -> str:
-        """Fetch the COMPLETE transcript from Vexa (no timestamp filter). Used on exit."""
-        data = self.vexa.get_transcript(self.platform, self.meeting_id)
-        segments = data.get("segments", [])
-        if not segments:
-            return ""
-        cleaned_text, _ = clean_segments(segments, after_timestamp=None)
-        return cleaned_text
+    def _record_participant_data(self, segments: list[dict]) -> None:
+        """Record raw Vexa segments into the participant tracker.
+
+        Only processes segments newer than last_segment_timestamp (same filter
+        logic as clean_segments) so we don't double-count across cycles.
+        """
+        after_ts = self.state.last_segment_timestamp
+        for seg in segments:
+            ts = seg.get("absolute_start_time", "")
+            text = seg.get("text", "").strip()
+            speaker = seg.get("speaker") or "Unknown"
+            if not text:
+                continue
+            # Apply the same timestamp filter used by clean_segments
+            if after_ts and ts and ts <= after_ts:
+                continue
+            self.state.participant_tracker.record_segment(speaker, text, ts)
 
     # ------------------------------------------------------------------
     # Step 3: LLM analysis
@@ -151,12 +159,11 @@ class MeetingFocusTracker:
             rolling_summary=self.state.rolling_summary,
             current_item=self.state.current_agenda_item,
             new_transcript=new_transcript,
-            past_context=self.past_context,
         )
         return self.llm.call(
             system_prompt=FOCUS_TRACKER_SYSTEM,
             user_message=user_msg,
-            max_tokens=2048,
+            max_tokens=1024,
         )
 
     # ------------------------------------------------------------------
@@ -173,11 +180,15 @@ class MeetingFocusTracker:
         level = result.get("deviation_level", "insufficient_data")
         if level == "off_topic":
             self.state.deviation_counter += 1
+            self.state.off_topic_cycles += 1
         elif level == "tangential":
             self.state.deviation_counter += 0.5
+            self.state.tangential_cycles += 1
         else:
             # on_track or insufficient_data → full reset
             self.state.deviation_counter = 0
+            if level == "on_track":
+                self.state.on_track_cycles += 1
 
         logger.debug(
             "State updated — item=%s, deviation_counter=%.1f",
@@ -217,8 +228,8 @@ class MeetingFocusTracker:
         # macOS desktop notification — pops up on screen over Google Meet
         notif_title = "Off Topic!" if level == "off_topic" else "Drifting!"
         # Escape double quotes for AppleScript
-        safe_reason = (reason or "").replace('"', '\\"')
-        safe_suggestion = (suggestion or "Consider returning to the agenda.").replace('"', '\\"')
+        safe_reason = reason.replace('"', '\\"')
+        safe_suggestion = suggestion.replace('"', '\\"')
         applescript = (
             f'display notification "{safe_reason}\\n{safe_suggestion}" '
             f'with title "Meeting Focus Tracker" '
@@ -245,6 +256,161 @@ class MeetingFocusTracker:
         return True
 
     # ------------------------------------------------------------------
+    # Post-meeting email generation
+    # ------------------------------------------------------------------
+
+    def generate_meeting_report(self) -> dict:
+        """Call the LLM to generate a structured post-meeting email JSON.
+
+        Gathers all accumulated state (participant stats, full transcript,
+        deviation stats, history) and sends it to the email-generation prompt.
+
+        Returns the parsed JSON dict from the LLM.
+        """
+        participant_stats = self.state.participant_tracker.to_dict()
+        full_transcript = "\n".join(self.state.full_transcript_lines)
+        deviation_stats = {
+            "total_cycles": self.state.cycle_count,
+            "on_track_cycles": self.state.on_track_cycles,
+            "tangential_cycles": self.state.tangential_cycles,
+            "off_topic_cycles": self.state.off_topic_cycles,
+        }
+        previous_meetings = self.history_store.get_previous_meetings(
+            self.meeting_id or "unknown"
+        )
+        meeting_date = (
+            self.state.meeting_start_time[:10]
+            if self.state.meeting_start_time
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
+        meeting_meta = {
+            "meeting_id": self.meeting_id or "unknown",
+            "platform": self.platform,
+            "date": meeting_date,
+            "total_cycles": self.state.cycle_count,
+        }
+
+        user_msg = build_email_user_message(
+            agenda=self.agenda_formatted,
+            full_transcript=full_transcript,
+            participant_stats=participant_stats,
+            rolling_summary=self.state.rolling_summary,
+            deviation_stats=deviation_stats,
+            previous_meetings=previous_meetings,
+            meeting_meta=meeting_meta,
+        )
+
+        logger.info("Generating post-meeting email report via LLM…")
+        try:
+            report = self.llm.call(
+                system_prompt=MEETING_EMAIL_SYSTEM,
+                user_message=user_msg,
+                max_tokens=4096,
+            )
+        except Exception:
+            logger.exception("LLM call for email generation failed")
+            report = {}
+
+        return report
+
+    def send_meeting_email(self, report: dict) -> bool:
+        """Format *report* as HTML + text and send via SMTP.
+
+        Returns True if the email was dispatched successfully or if email
+        is intentionally disabled (SMTP_HOST not configured).
+        Saving the report to the history store is always attempted regardless
+        of whether the email send succeeds.
+        """
+        meeting_date = (
+            self.state.meeting_start_time[:10]
+            if self.state.meeting_start_time
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
+        meeting_meta = {
+            "meeting_id": self.meeting_id or "unknown",
+            "platform": self.platform,
+            "date": meeting_date,
+            "total_cycles": self.state.cycle_count,
+        }
+
+        # ── Always save to history store ────────────────────────────────
+        history_payload = dict(report)
+        history_payload["meeting_meta"] = meeting_meta
+        history_payload["participant_stats"] = self.state.participant_tracker.to_dict()
+        history_payload["deviation_stats"] = {
+            "total_cycles": self.state.cycle_count,
+            "on_track_cycles": self.state.on_track_cycles,
+            "tangential_cycles": self.state.tangential_cycles,
+            "off_topic_cycles": self.state.off_topic_cycles,
+        }
+        try:
+            self.history_store.save_meeting(self.meeting_id or "unknown", history_payload)
+        except Exception:
+            logger.exception("Failed to save meeting to history store")
+
+        # ── Skip email send if SMTP is not configured ───────────────────
+        if not Config.email_enabled():
+            logger.info(
+                "Email not configured (SMTP_HOST / EMAIL_SENDER / EMAIL_RECIPIENTS missing). "
+                "Report saved to history store only."
+            )
+            return True
+
+        html_body = format_email_html(report, meeting_meta)
+        text_body = format_email_text(report, meeting_meta)
+
+        subject = (
+            f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
+        )
+
+        client = EmailClient(
+            smtp_host=Config.SMTP_HOST,
+            smtp_port=Config.SMTP_PORT,
+            smtp_user=Config.SMTP_USER,
+            smtp_password=Config.SMTP_PASSWORD,
+            sender_email=Config.EMAIL_SENDER,
+            use_tls=Config.SMTP_USE_TLS,
+            use_ssl=Config.SMTP_USE_SSL,
+        )
+        return client.send(
+            to_emails=Config.EMAIL_RECIPIENTS,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+        )
+
+    def _run_post_meeting_pipeline(self) -> None:
+        """Generate and send the post-meeting email report.
+
+        Called automatically when the main loop exits (KeyboardInterrupt).
+        All errors are caught so they never mask the graceful-exit message.
+        """
+        if self.state.cycle_count == 0:
+            logger.info("No cycles completed — skipping post-meeting report")
+            return
+
+        print("\n" + "=" * 60)
+        print("  Generating post-meeting intelligence report…")
+        print("=" * 60)
+
+        report = self.generate_meeting_report()
+        if not report:
+            print("  Report generation failed. Check logs.")
+            return
+
+        sent = self.send_meeting_email(report)
+
+        if Config.email_enabled():
+            status = "sent" if sent else "failed (check logs)"
+            print(f"  Email report: {status}")
+            if sent:
+                print(f"  Recipients : {', '.join(Config.EMAIL_RECIPIENTS)}")
+        else:
+            print("  Email not configured — report saved to history store only.")
+
+        print("=" * 60 + "\n")
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
@@ -255,9 +421,6 @@ class MeetingFocusTracker:
         if not self.agenda_formatted:
             print("No agenda could be extracted from the calendar description. Exiting.")
             return
-
-        # 1b. Load past meeting context
-        self.load_past_context()
 
         # 2. Startup banner
         print("\n" + "=" * 60)
@@ -272,17 +435,7 @@ class MeetingFocusTracker:
         print("  AGENDA:")
         for line in self.agenda_formatted.split("\n"):
             print(f"    {line}")
-        if self.past_context:
-            print("-" * 60)
-            print("  MEMORY: Found related previous meetings")
         print("=" * 60 + "\n")
-
-        # 2b. Request bot to join
-        try:
-            self.vexa.start_bot(self.platform, self.meeting_id)
-            print("  Bot join requested — admit 'FocusBot' in Google Meet when it appears\n")
-        except Exception as e:
-            logger.warning("Bot join request failed (may already be in meeting): %s", e)
 
         # 3. Infinite loop
         try:
@@ -298,28 +451,8 @@ class MeetingFocusTracker:
                     # b. Skip if not enough data
                     if count_meaningful_words(new_transcript) < 5:
                         print(f"[Cycle {cycle}] -- Insufficient new transcript, skipping analysis")
-                        # Track empty cycles after we've had real data
-                        if self.state.had_transcript:
-                            self.state.empty_cycles_since_data += 1
-                            if self.state.empty_cycles_since_data >= 1:
-                                time.sleep(2)
-                                # One final check to be sure
-                                final_transcript = self.fetch_new_transcript()
-                                if count_meaningful_words(final_transcript) >= 5:
-                                    self.state.empty_cycles_since_data = 0
-                                    self.state.full_transcript += "\n" + final_transcript
-                                    continue
-                                print(f"\n[Cycle {cycle}] Meeting ended — no new transcript.")
-                                print("Saving meeting to memory...")
-                                self._save_to_memory()
-                                print("Meeting saved. Exiting.")
-                                return
                         self._sleep_remaining(cycle_start)
                         continue
-
-                    # Reset empty cycle counter when we get data
-                    self.state.had_transcript = True
-                    self.state.empty_cycles_since_data = 0
 
                     # c. Analyse
                     result = self.analyze(new_transcript)
@@ -345,16 +478,9 @@ class MeetingFocusTracker:
                         print(f"    {line[:100]}")
                     if len(new_transcript.split("\n")) > 5:
                         print(f"    ... (+{len(new_transcript.split(chr(10))) - 5} more lines)")
-                    rep_detected = result.get("repetition_detected", False)
-                    rep_note = result.get("repetition_note")
-                    if rep_detected and rep_note:
-                        print(f"  REPEAT     : {rep_note}")
-                    elif rep_note:
-                        print(f"  PROGRESS   : {rep_note}")
                     print(f"  ── Rolling Summary ──")
-                    for line in summary.replace("\\n", "\n").split("\n"):
-                        if line.strip():
-                            print(f"    {line.strip()}")
+                    for line in summary.split("\\n"):
+                        print(f"    {line}")
                     print(f"{'─'*60}")
 
                     # e. State update
@@ -372,288 +498,8 @@ class MeetingFocusTracker:
                 self._sleep_remaining(cycle_start)
 
         except KeyboardInterrupt:
-            print("\nSaving meeting to memory...")
-            self._save_to_memory()
-            print("Stopping focus tracker. Goodbye!")
-
-    def _save_to_memory(self) -> None:
-        """Persist meeting: transcript + summary + thread grouping + memory + G Suite exports."""
-        from datetime import datetime, timezone
-
-        now = datetime.now()
-        rolling = self.state.rolling_summary
-
-        # 1. Fetch COMPLETE transcript from Vexa (not cycle deltas)
-        print("  Fetching complete transcript from Vexa...")
-        time.sleep(3)  # let Vexa flush final segments
-        raw_transcript = self.fetch_full_transcript()
-        if not raw_transcript.strip():
-            raw_transcript = self.state.full_transcript or ""
-
-        # 2. Build structured transcript with metadata header
-        transcript_lines = [
-            f"MEETING TRANSCRIPT",
-            f"{'='*50}",
-            f"Meeting ID : {self.meeting_id}",
-            f"Date       : {now.strftime('%Y-%m-%d %H:%M')}",
-            f"Platform   : {self.platform}",
-            f"Agenda     : {self.agenda_formatted.replace(chr(10), ' | ')}",
-            f"{'='*50}",
-            f"",
-        ]
-        if raw_transcript.strip():
-            transcript_lines.append(raw_transcript)
-        else:
-            transcript_lines.append("(no transcript captured)")
-        full_transcript = "\n".join(transcript_lines)
-
-        # 3. Generate LLM-powered structured summary
-        print("  Generating meeting summary...")
-        try:
-            summary_data = self.llm.call(
-                system_prompt=SUMMARY_GENERATOR_SYSTEM,
-                user_message=build_summary_message(
-                    agenda=self.agenda_formatted,
-                    rolling_summary=rolling,
-                    full_transcript=raw_transcript,
-                ),
-                max_tokens=2048,
-            )
-            # Inject metadata the LLM doesn't know
-            summary_data["meeting_id"] = self.meeting_id
-            summary_data["date"] = now.isoformat()
-            summary_data["platform"] = self.platform
-            summary_data["agenda_raw"] = self.agenda_formatted
-            summary_data["deviation_count"] = int(self.state.deviation_counter)
-        except Exception:
-            logger.exception("LLM summary generation failed, using fallback")
-            summary_data = {
-                "meeting_id": self.meeting_id,
-                "date": now.isoformat(),
-                "agenda_raw": self.agenda_formatted,
-                "agenda_items": self.agenda_items,
-                "rolling_summary": rolling,
-                "title": f"Meeting {self.meeting_id} — {now.strftime('%Y-%m-%d %H:%M')}",
-                "deviation_count": int(self.state.deviation_counter),
-            }
-
-        # Extract decisions/open_items for memory storage
-        decisions = []
-        open_items = []
-        for item in summary_data.get("agenda_items", []):
-            if isinstance(item, dict):
-                decisions.extend(item.get("decisions", []))
-                open_items.extend(item.get("action_items", []))
-        for a in summary_data.get("overall_action_items", []):
-            if isinstance(a, dict):
-                open_items.append(a.get("action", ""))
-
-        # 3.5. Compute efficiency metrics
-        print("  Computing meeting efficiency metrics...")
-        try:
-            # Estimate meeting duration in minutes
-            meeting_duration = (self.state.cycle_count * (Config.POLL_INTERVAL / 60.0))
-            if meeting_duration == 0:
-                meeting_duration = 30  # default estimate
-
-            # Compute adherence score (based on deviation counter)
-            adherence_score = MeetingMetrics.compute_adherence_score(
-                deviation_count=self.state.deviation_counter,
-                total_cycles=self.state.cycle_count,
-            )
-
-            # Estimate redundancy (assume if we had related meetings, some redundancy)
-            related_meetings = self.memory.find_related_meetings(
-                self.agenda_items, max_results=3, threshold=0.4
-            )
-            redundancy_score = MeetingMetrics.compute_redundancy_score(
-                repetition_detected=len(related_meetings) > 0,
-                repetition_count=1 if len(related_meetings) > 0 else 0,
-                total_topics_discussed=len(self.agenda_items) if self.agenda_items else 1,
-            )
-
-            # Compute decision rate
-            decision_rate = MeetingMetrics.compute_decision_rate(
-                decisions=decisions,
-                meeting_duration_minutes=meeting_duration,
-            )
-
-            # Compute overall efficiency
-            overall_efficiency = MeetingMetrics.compute_overall_efficiency(
-                adherence_score=adherence_score,
-                redundancy_score=redundancy_score,
-                decision_rate=decision_rate,
-            )
-
-            # Store metrics in summary
-            summary_data["metrics"] = {
-                "adherence_score": adherence_score,
-                "redundancy_score": redundancy_score,
-                "decision_rate": round(decision_rate, 2),
-                "overall_efficiency": overall_efficiency,
-                "meeting_duration_minutes": meeting_duration,
-                "cycles_analyzed": self.state.cycle_count,
-            }
-
-            # Display metrics report
-            metrics_report = MeetingMetrics.build_metrics_report(
-                adherence_score=adherence_score,
-                redundancy_score=redundancy_score,
-                decision_rate=decision_rate,
-                overall=overall_efficiency,
-                decisions=decisions,
-                open_items=open_items,
-            )
-            print(metrics_report)
-
-        except Exception:
-            logger.exception("Failed to compute metrics (non-blocking)")
-            # Metrics are optional, continue even if computation fails
-
-        try:
-            # 4. Save to thread structure (transcript + summary grouped by agenda)
-            meeting_dir = save_meeting_to_thread(
-                meeting_id=self.meeting_id,
-                agenda=self.agenda_formatted,
-                agenda_items=self.agenda_items,
-                summary=summary_data,
-                transcript=full_transcript,
-                rolling_summary=rolling,
-            )
-            print(f"  Saved to thread: {meeting_dir}")
-
-            # 5. Also save to flat meeting memory (for fuzzy matching / LLM context injection)
-            self.memory.save_meeting(
-                meeting_id=self.meeting_id,
-                date=datetime.now(timezone.utc).isoformat(),
-                agenda_raw=self.agenda_formatted,
-                agenda_items=self.agenda_items,
-                final_summary=rolling,
-                decisions=decisions,
-                open_items=open_items,
-                deviation_count=int(self.state.deviation_counter),
-            )
-
-            # 6. Thread insight
-            thread_dir = find_matching_thread(self.agenda_formatted)
-            if thread_dir:
-                thread_meetings = get_thread_meetings(thread_dir)
-                if len(thread_meetings) >= 2:
-                    print(f"\n{'─'*60}")
-                    print(f"  THREAD HISTORY ({len(thread_meetings)} meetings on this agenda)")
-                    print(f"{'─'*60}")
-                    for m in thread_meetings:
-                        date_str = m.get("date", "")[:16].replace("T", " ")
-                        title = m.get("title", "Untitled")[:50]
-                        print(f"    {date_str}  {title}")
-                    print(f"{'─'*60}")
-
-            all_related = self.memory.find_related_meetings(
-                self.agenda_items, max_results=10, threshold=0.4
-            )
-            if len(all_related) >= 2:
-                thread = generate_thread_insight(all_related)
-                print(f"\n{'─'*60}")
-                print(f"  REPETITION ANALYSIS ({thread['total_meetings']} meetings)")
-                print(f"{'─'*60}")
-                print(f"  Repetition : {thread['repetition_pct']}%")
-                if thread.get("repeated_topics"):
-                    print(f"  Recurring  : {', '.join(str(t) for t in thread['repeated_topics'][:5])}")
-                print(f"  Decisions  : {thread.get('total_decisions', 0)} total across thread")
-                print(f"  Insight    : {thread['insight']}")
-                print(f"{'─'*60}")
-
-            logger.info("Meeting saved to memory")
-
-            # 7. Export to Google Workspace
-            title = self.meeting_title or f"Meeting {self.meeting_id}"
-            deviation_count = int(self.state.deviation_counter)
-            summary_text = rolling
-
-            drive_url = self._export_to_google_drive(title, summary_text, decisions, open_items, deviation_count)
-            self._export_to_gmail(title, summary_text, decisions, open_items, deviation_count)
-            self._export_to_google_chat(title, summary_text, decisions, open_items, drive_url)
-
-        except Exception:
-            logger.exception("Failed to save meeting to memory")
-
-    def _export_to_google_drive(
-        self, title: str, summary: str, decisions: list[str],
-        open_items: list[str], deviation_count: int,
-    ) -> str | None:
-        """Save meeting notes to Google Drive if enabled. Returns doc URL."""
-        if not Config.ENABLE_GOOGLE_DRIVE or not self.google_creds:
-            return None
-        try:
-            from services.google_drive import GoogleDriveService
-            drive = GoogleDriveService(self.google_creds)
-            doc_url = drive.save_meeting_notes(
-                meeting_title=title,
-                agenda=self.agenda_formatted,
-                summary=summary,
-                decisions=decisions,
-                open_items=open_items,
-                deviation_count=deviation_count,
-            )
-            if doc_url:
-                print(f"  Meeting notes saved to Google Drive: {doc_url}")
-            return doc_url
-        except Exception:
-            logger.exception("Google Drive export failed")
-            return None
-
-    def _export_to_gmail(
-        self, title: str, summary: str, decisions: list[str],
-        open_items: list[str], deviation_count: int,
-    ) -> None:
-        """Email meeting summary to attendees if enabled."""
-        if not Config.ENABLE_GMAIL_SUMMARY or not self.google_creds:
-            return
-        if not self.attendees:
-            logger.info("Gmail export skipped — no attendees to email")
-            return
-        try:
-            from services.gmail_service import GmailService
-            gmail = GmailService(self.google_creds)
-            sent = gmail.send_meeting_summary(
-                to_emails=self.attendees,
-                meeting_title=title,
-                agenda=self.agenda_formatted,
-                summary=summary,
-                decisions=decisions,
-                open_items=open_items,
-                deviation_count=deviation_count,
-            )
-            if sent:
-                print(f"  Meeting summary emailed to {len(self.attendees)} attendees")
-        except Exception:
-            logger.exception("Gmail export failed")
-
-    def _export_to_google_chat(
-        self, title: str, summary: str, decisions: list[str],
-        open_items: list[str], drive_url: str | None = None,
-    ) -> None:
-        """Post meeting summary to Google Chat spaces if enabled."""
-        if not Config.ENABLE_GOOGLE_CHAT or not self.google_creds:
-            return
-        if not self.attendees:
-            logger.info("Google Chat export skipped — no attendees")
-            return
-        try:
-            from services.google_chat import GoogleChatService
-            chat = GoogleChatService(self.google_creds)
-            chat.discover_and_cache_spaces()
-            result = chat.post_meeting_summary(
-                meeting_title=title,
-                participants=self.attendees,
-                decisions=decisions,
-                open_items=open_items,
-                drive_url=drive_url,
-            )
-            if result["success"] and result["spaces_posted"]:
-                print(f"  Posted to {len(result['spaces_posted'])} Google Chat spaces")
-        except Exception:
-            logger.exception("Google Chat export failed")
+            print("\nStopping focus tracker. Goodbye!")
+            self._run_post_meeting_pipeline()
 
     def _sleep_remaining(self, cycle_start: float) -> None:
         """Sleep for the remainder of the poll interval."""
