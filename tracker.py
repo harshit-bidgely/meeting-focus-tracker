@@ -230,8 +230,8 @@ class MeetingFocusTracker:
         # macOS desktop notification — pops up on screen over Google Meet
         notif_title = "Off Topic!" if level == "off_topic" else "Drifting!"
         # Escape double quotes for AppleScript
-        safe_reason = reason.replace('"', '\\"')
-        safe_suggestion = suggestion.replace('"', '\\"')
+        safe_reason = reason.replace('"', '\\"') if reason else ""
+        safe_suggestion = suggestion.replace('"', '\\"') if suggestion else ""
         applescript = (
             f'display notification "{safe_reason}\\n{safe_suggestion}" '
             f'with title "Meeting Focus Tracker" '
