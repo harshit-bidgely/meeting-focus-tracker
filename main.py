@@ -145,8 +145,31 @@ def _run_manual_mode() -> None:
     # Set Config values for tracker initialization
     Config.MEETING_ID = meeting_id
 
-    # Create tracker with Google credentials for Gmail API email sending
-    tracker = MeetingFocusTracker(google_creds=google_creds)
+    # Collect all recipient emails from calendar event:
+    #   - all attendees (excluding the bot/service account itself)
+    #   - the organizer email
+    # These are passed directly to the tracker so Gmail API can send
+    # without requiring any SMTP or EMAIL_RECIPIENTS config in .env
+    email_recipients: list[str] = []
+    if calendar_event:
+        seen: set[str] = set()
+        for addr in list(calendar_event.attendees) + [calendar_event.organizer_email]:
+            if addr and addr not in seen:
+                email_recipients.append(addr)
+                seen.add(addr)
+
+    if email_recipients:
+        print(f"  Email recipients: {len(email_recipients)} calendar attendees")
+    elif Config.EMAIL_RECIPIENTS:
+        print(f"  Email recipients: {len(Config.EMAIL_RECIPIENTS)} from config")
+
+    # Create tracker — passes Google OAuth creds (enables Gmail API) and
+    # attendee list (auto-populated from calendar, no .env config needed)
+    tracker = MeetingFocusTracker(
+        google_creds=google_creds,
+        attendees=email_recipients,
+        meeting_title=meeting_title,
+    )
     tracker.run(description)
 
 

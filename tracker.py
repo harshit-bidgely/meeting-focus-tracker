@@ -67,14 +67,18 @@ class MeetingState:
 class MeetingFocusTracker:
     """Main orchestrator — extracts agenda, polls transcript, analyses focus, sends alerts."""
 
-    def __init__(self, google_creds=None) -> None:
+    def __init__(self, google_creds=None, attendees: list | None = None, meeting_title: str = "") -> None:
         self.vexa = VexaClient(api_base=Config.VEXA_API_BASE, api_key=Config.VEXA_API_KEY)
         self.llm = LLMClient(api_key=Config.LLM_API_KEY, model=Config.LLM_MODEL, api_base=Config.LLM_API_BASE)
         self.state = MeetingState()
         self.agenda_formatted: str = ""
         self.platform: str = Config.MEETING_PLATFORM
         self.meeting_id: str = Config.MEETING_ID
-        self.google_creds = google_creds  # Store Google credentials for email sending
+        self.google_creds = google_creds  # Store Google credentials for Gmail API email sending
+        self.meeting_title: str = meeting_title
+        # Attendees from Google Calendar — used as email recipients when Gmail API is available.
+        # Falls back to Config.EMAIL_RECIPIENTS if not provided.
+        self.attendees: list[str] = attendees or []
 
         # History store (persists meeting reports across sessions)
         history_kwargs = {}
@@ -323,14 +327,20 @@ class MeetingFocusTracker:
     def send_meeting_email(self, report: dict, google_creds=None) -> bool:
         """Format *report* as HTML + text and send via Gmail API or SMTP.
 
+        Priority for recipients:
+          1. self.attendees  — email addresses from Google Calendar event
+          2. Config.EMAIL_RECIPIENTS — manually configured fallback list
+
+        Priority for transport:
+          1. Gmail API  — when google_creds are available (no SMTP config needed)
+          2. SMTP       — fallback when Gmail API is not configured
+
         Args:
             report: Meeting intelligence report dict
             google_creds: Optional Google OAuth credentials for Gmail API
 
-        Returns True if the email was dispatched successfully or if email
-        is intentionally disabled (SMTP_HOST not configured).
-        Saving the report to the history store is always attempted regardless
-        of whether the email send succeeds.
+        Returns True if the email was dispatched successfully.
+        Saving the report to the history store is always attempted regardless.
         """
         meeting_date = (
             self.state.meeting_start_time[:10]
@@ -359,45 +369,52 @@ class MeetingFocusTracker:
         except Exception:
             logger.exception("Failed to save meeting to history store")
 
-        # ── Try Gmail API first if Google credentials available ───────────
+        # ── Resolve recipients: calendar attendees → Config fallback ────
+        recipients: list[str] = (
+            self.attendees if self.attendees else list(Config.EMAIL_RECIPIENTS or [])
+        )
+
+        if not recipients:
+            logger.info(
+                "No email recipients configured. "
+                "Add attendees via Google Calendar or set EMAIL_RECIPIENTS in .env. "
+                "Report saved to history store only."
+            )
+            return True
+
+        # ── Build email content ─────────────────────────────────────────
+        html_body = format_professional_html(report, meeting_meta)
+        text_body = format_professional_text(report, meeting_meta)
+        meeting_title = self.meeting_title or self.meeting_id or "Meeting"
+        subject = f"{Config.EMAIL_SUBJECT_PREFIX}: {meeting_title} — {meeting_date}"
+
+        # ── Gmail API (preferred — no SMTP config needed) ────────────────
         if google_creds:
             try:
-                html_body = format_professional_html(report, meeting_meta)
-                text_body = format_professional_text(report, meeting_meta)
-                subject = (
-                    f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
-                )
-
                 gmail_client = GmailClient(google_creds)
                 success = gmail_client.send_email(
-                    to_addresses=Config.EMAIL_RECIPIENTS or [],
+                    to_addresses=recipients,
                     subject=subject,
                     html_content=html_body,
                     text_content=text_body,
                 )
                 if success:
-                    logger.info("Email sent successfully via Gmail API")
-                    print("  Email report: sent via Gmail API")
+                    logger.info("Email sent via Gmail API to: %s", recipients)
+                    print(f"  Email report: sent via Gmail API")
+                    print(f"  Recipients : {', '.join(recipients)}")
                     return True
                 else:
                     logger.warning("Gmail API send failed, falling back to SMTP")
             except Exception as e:
                 logger.warning(f"Gmail API error: {e}, falling back to SMTP")
 
-        # ── Fall back to SMTP if Gmail API failed or not available ────────
+        # ── SMTP fallback ─────────────────────────────────────────────────
         if not Config.email_enabled():
             logger.info(
-                "Email not configured (SMTP_HOST / EMAIL_SENDER / EMAIL_RECIPIENTS missing "
-                "and no Google credentials). Report saved to history store only."
+                "SMTP not configured (SMTP_HOST / EMAIL_SENDER missing). "
+                "Report saved to history store only."
             )
             return True
-
-        html_body = format_professional_html(report, meeting_meta)
-        text_body = format_professional_text(report, meeting_meta)
-
-        subject = (
-            f"{Config.EMAIL_SUBJECT_PREFIX}: {self.meeting_id or 'Meeting'} — {meeting_date}"
-        )
 
         client = EmailClient(
             smtp_host=Config.SMTP_HOST,
@@ -409,7 +426,7 @@ class MeetingFocusTracker:
             use_ssl=Config.SMTP_USE_SSL,
         )
         return client.send(
-            to_emails=Config.EMAIL_RECIPIENTS,
+            to_emails=recipients,
             subject=subject,
             html_body=html_body,
             text_body=text_body,
@@ -436,13 +453,19 @@ class MeetingFocusTracker:
 
         sent = self.send_meeting_email(report, google_creds=self.google_creds)
 
-        if Config.email_enabled() or self.google_creds:
-            status = "sent" if sent else "failed (check logs)"
-            print(f"  Email report: {status}")
-            if sent:
-                print(f"  Recipients : {', '.join(Config.EMAIL_RECIPIENTS)}")
+        # Determine which recipients were used
+        recipients = self.attendees if self.attendees else list(Config.EMAIL_RECIPIENTS or [])
+        has_email = bool(self.google_creds or Config.email_enabled())
+
+        if not recipients:
+            print("  No email recipients — report saved to history store only.")
+            print("  Tip: Connect Google Calendar to auto-populate attendees.")
+        elif not has_email:
+            print("  Email transport not configured — report saved to history store only.")
+            print("  Tip: Run with Google OAuth (--auto mode) to enable Gmail API sending.")
         else:
-            print("  Email not configured — report saved to history store only.")
+            status = "sent" if sent else "failed (check logs)"
+            print(f"  Email report : {status}")
 
         print("=" * 60 + "\n")
 

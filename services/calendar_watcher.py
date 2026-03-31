@@ -390,7 +390,20 @@ class CalendarWatcher:
             # Set Config values for tracker initialization
             Config.MEETING_ID = event.meet_id
 
-            tracker = MeetingFocusTracker(google_creds=self.google_creds)
+            # Build email recipient list from calendar attendees + organizer.
+            # Gmail API will send to these automatically — no .env config needed.
+            email_recipients: list[str] = []
+            seen: set[str] = set()
+            for addr in list(event.attendees) + [event.organizer_email]:
+                if addr and addr not in seen:
+                    email_recipients.append(addr)
+                    seen.add(addr)
+
+            tracker = MeetingFocusTracker(
+                google_creds=self.google_creds,
+                attendees=email_recipients,
+                meeting_title=event.summary,
+            )
             tracker.run(description)
         except Exception:
             logger.exception("Tracker crashed for %s", event.meet_id)
