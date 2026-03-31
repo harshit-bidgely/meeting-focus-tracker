@@ -59,6 +59,8 @@ class MeetingState:
     off_topic_cycles: int = 0
     # ISO timestamp when the meeting started (set on first transcript fetch)
     meeting_start_time: str | None = None
+    # Unix timestamp of last meaningful transcript received (for meeting end detection)
+    last_transcript_time: float = 0.0
 
 
 class MeetingFocusTracker:
@@ -451,11 +453,24 @@ class MeetingFocusTracker:
                     # a. Fetch new transcript
                     new_transcript = self.fetch_new_transcript()
 
-                    # b. Skip if not enough data
+                    # b. Check if meeting has ended (no new data for 30+ seconds)
                     if count_meaningful_words(new_transcript) < 5:
+                        # No meaningful data this cycle
+                        if self.state.last_transcript_time > 0:
+                            seconds_since_last = time.time() - self.state.last_transcript_time
+                            if seconds_since_last > 30:
+                                print(f"\n{'='*60}")
+                                print(f"[Cycle {cycle}] MEETING ENDED — No activity for {int(seconds_since_last)}s")
+                                print(f"{'='*60}")
+                                print("Generating final report and sending email...")
+                                self._run_post_meeting_pipeline()
+                                return
                         print(f"[Cycle {cycle}] -- Insufficient new transcript, skipping analysis")
                         self._sleep_remaining(cycle_start)
                         continue
+                    else:
+                        # Update last transcript time when we receive new meaningful data
+                        self.state.last_transcript_time = time.time()
 
                     # c. Analyse
                     result = self.analyze(new_transcript)
