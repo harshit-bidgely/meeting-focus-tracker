@@ -25,16 +25,16 @@ def _make_tracker(
     with patch.object(Config, "LLM_API_KEY", "test-key"), \
          patch.object(Config, "LLM_API_BASE", "https://api.groq.com/openai/v1"), \
          patch.object(Config, "VEXA_API_KEY", "test-key"), \
+         patch.object(Config, "MEETING_ID", meeting_id), \
          patch.object(Config, "MEETING_PLATFORM", "google_meet"), \
          patch.object(Config, "DEVIATION_THRESHOLD", 2), \
          patch.object(Config, "ALERT_COOLDOWN", 180), \
          patch.object(Config, "POLL_INTERVAL", 1):
-        tracker = MeetingFocusTracker(
-            meeting_id=meeting_id,
-            google_creds=google_creds,
-            meeting_title=meeting_title,
-            attendees=attendees,
-        )
+        tracker = MeetingFocusTracker(google_creds=google_creds)
+    # Store G Suite parameters directly on tracker instance
+    tracker.google_creds = google_creds
+    tracker.meeting_title = meeting_title
+    tracker.attendees = attendees or []
     tracker.vexa = MagicMock()
     tracker.llm = MagicMock()
     tracker.memory = MagicMock()

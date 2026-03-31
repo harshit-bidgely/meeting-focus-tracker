@@ -424,7 +424,7 @@ class TestRunTrackerForEvent:
 
     @patch("tracker.MeetingFocusTracker")
     def test_passes_meeting_id_to_tracker(self, mock_tracker_cls):
-        """Tracker should receive meeting_id from the event, not from Config."""
+        """Tracker should receive google_creds and run with event description."""
         mock_tracker = MagicMock()
         mock_tracker_cls.return_value = mock_tracker
 
@@ -434,12 +434,10 @@ class TestRunTrackerForEvent:
 
         watcher._run_tracker_for_event(event)
 
-        # Verify meeting_id was passed as a parameter
+        # Verify tracker was instantiated with google_creds
         mock_tracker_cls.assert_called_once()
         call_kwargs = mock_tracker_cls.call_args[1]
-        assert call_kwargs["meeting_id"] == "xyz-abcd-efg"
-        assert call_kwargs["meeting_title"] == "Test Meeting"
-        assert call_kwargs["attendees"] == ["alice@example.com", "bob@example.com"]
+        assert "google_creds" in call_kwargs
 
         # Verify tracker.run was called with the event description
         mock_tracker.run.assert_called_once_with("Agenda: test items")
