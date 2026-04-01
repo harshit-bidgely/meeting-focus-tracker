@@ -1,0 +1,326 @@
+{
+  "meeting_overview": {
+    "title": "Hackathon Discussion and Ideas Review",
+    "date": "2026-03-31",
+    "duration_minutes": "Insufficient data for duration",
+    "participants_count": 2,
+    "meeting_health": "fair",
+    "strategic_value": "medium",
+    "narrative": "The meeting focused on discussing a meeting tracking API concept, its core functionality, and technical challenges. The conversation also touched upon common meeting problems and potential future enhancements. However, the meeting slightly deviated from its agenda, and some topics were not fully explored. Key decisions included assigning action items related to the hackathon project. The meeting's conclusion highlighted the need for future discussions on the project's progression and potential outcomes."
+  },
+  "key_metrics": {
+    "overall_meeting_score": 60,
+    "meeting_health_indicators": {
+      "agenda_adherence": 70,
+      "decision_velocity": 40,
+      "participation_balance": 30,
+      "time_efficiency": "Insufficient data for time efficiency",
+      "team_engagement": 50,
+      "psychological_safety": 80
+    },
+    "trend_vs_previous_5_meetings": {
+      "score_change": "Insufficient data for trend analysis",
+      "pattern": "Insufficient data for trend analysis",
+      "note": "No historical meeting data available for comparison."
+    }
+  },
+  "participant_deep_analysis": [
+    {
+      "name": "Harshit Singh",
+      "title_inferred": "Project Lead",
+      "participation_metrics": {
+        "total_words": 487,
+        "word_share_percent": 76.9,
+        "speaking_segments": 13,
+        "avg_segment_length": "Insufficient data for segment length",
+        "speaking_frequency": "frequent",
+        "participation_level": "High"
+      },
+      "communication_style": {
+        "type": "decision_maker",
+        "confidence_level": "high",
+        "decisiveness": "strong",
+        "collaboration": "medium"
+      },
+      "topic_focus": "Meeting tracking API, technical challenges, and project progression",
+      "influence_assessment": "High influence on the meeting's direction and decisions",
+      "engagement_score": 80,
+      "growth_trajectory": "No historical data for comparison, but showed strong leadership skills",
+      "strengths": "Clear communication, technical expertise",
+      "development_areas": "Delegation, time management",
+      "team_role_assessment": "Strategic/technical leadership"
+    },
+    {
+      "name": "Shivank Bhardwaj",
+      "title_inferred": "Team Member",
+      "participation_metrics": {
+        "total_words": 146,
+        "word_share_percent": 23.1,
+        "speaking_segments": 4,
+        "avg_segment_length": "Insufficient data for segment length",
+        "speaking_frequency": "occasional",
+        "participation_level": "Low"
+      },
+      "communication_style": {
+        "type": "contributor",
+        "confidence_level": "medium",
+        "decisiveness": "moderate",
+        "collaboration": "high"
+      },
+      "topic_focus": "Technical challenges, project questions",
+      "influence_assessment": "Moderate influence on the meeting's discussions",
+      "engagement_score": 40,
+      "growth_trajectory": "No historical data for comparison, but showed interest in the project",
+      "strengths": "Collaborative attitude",
+      "development_areas": "Assertiveness, contribution to discussions",
+      "team_role_assessment": "Supportive/operational role"
+    }
+  ],
+  "team_dynamics": {
+    "collaboration_score": 60,
+    "psychological_safety_indicators": "high",
+    "dominance_patterns": {
+      "balanced": false,
+      "dominant_participants": [
+        "Harshit Singh: 76.9% of speaking"
+      ],
+      "quiet_participants": [
+        "Shivank Bhardwaj: 23.1% of speaking"
+      ],
+      "inclusion_assessment": "Some imbalance in participation, but respectful dialogue"
+    },
+    "cross_functional_collaboration": "Insufficient data for cross-functional collaboration assessment",
+    "conflict_indicators": "No overt conflicts detected",
+    "agreement_level": "moderate agreement",
+    "group_cohesion": "Some cohesion, but potential for improvement",
+    "power_dynamics": "Informal leadership by Harshit Singh due to project expertise"
+  },
+  "detailed_decisions": [
+    {
+      "decision_id": 1,
+      "decision": "Assign action items related to the hackathon project",
+      "context": "Discussion on project progression and technical challenges",
+      "who_decided": "Harshit Singh",
+      "consensus_level": "strong majority",
+      "affected_parties": [
+        "Harshit Singh",
+        "Shivank Bhardwaj"
+      ],
+      "implementation_readiness": "ready",
+      "blockers": "None identified",
+      "timeline": "Insufficient data for specific timeline",
+      "risk_level": "low"
+    }
+  ],
+  "risk_assessment": {
+    "critical_risks": [
+      {
+        "risk": "Project delays due to technical challenges",
+        "impact": "Potential impact on project timeline and team morale",
+        "probability": "medium",
+        "mitigation": "Regular project updates and technical support",
+        "owner": "Harshit Singh",
+        "target_resolution": "Ongoing"
+      }
+    ],
+    "unresolved_blockers": "None identified",
+    "dependency_risks": "Insufficient data for dependency risks",
+    "talent_risks": "No talent risks identified, but potential for future development needs"
+  },
+  "opportunities": [
+    {
+      "opportunity": "Enhance project tracking and collaboration tools",
+      "upside": "Improved team productivity and project outcomes",
+      "required_actions": [
+        "Implement project management tools",
+        "Provide regular updates"
+      ],
+      "owner": "Harshit Singh",
+      "timeline": "Short-term",
+      "effort_estimate": "medium",
+      "potential_roi": "High ROI"
+    }
+  ],
+  "action_items": [
+    {
+      "action": "Assign and track action items for the hackathon project",
+      "owner": "Harshit Singh",
+      "due_date": "Insufficient data for due date",
+      "priority": "high",
+      "dependencies": "None identified",
+      "estimated_effort": "low",
+      "business_impact": "Project progression and team productivity",
+      "context": "Meeting discussion on project technical challenges",
+      "success_criteria": "Successful implementation of project action items"
+    }
+  ],
+  "hr_insights": {
+    "engagement_level": "moderate",
+    "inclusion_assessment": {
+      "voice_heard_percentage": 100,
+      "psychological_safety": "high",
+      "participation_diversity": "Some imbalance in participation",
+      "equity_concerns": "None identified"
+    },
+    "retention_signals": {
+      "positive_signals": [
+        "Interest in project progression"
+      ],
+      "concerning_signals": [
+        "Some imbalance in participation"
+      ]
+    },
+    "collaboration_health": "Some cohesion, but potential for improvement",
+    "capability_assessment": "Technical expertise present, but potential for future development needs",
+    "development_opportunities": [
+      {
+        "person": "Shivank Bhardwaj",
+        "opportunity": "Leadership development",
+        "rationale": "To enhance participation and collaboration skills"
+      }
+    ],
+    "team_health_score": 60,
+    "cultural_observations": "Respectful dialogue and collaborative attitude observed"
+  },
+  "communication_quality": {
+    "clarity_score": 80,
+    "decisiveness_index": 70,
+    "question_quality": "questions_asked_count: 2, quality: medium",
+    "listening_effectiveness": "high",
+    "constructive_feedback": "Some evidence of constructive dialogue",
+    "conflict_resolution_approach": "Collaborative"
+  },
+  "redundancy_analysis": {
+    "topics_repeated_without_progress": [
+      "Technical challenges"
+    ],
+    "efficient_revisits": [
+      "Project progression"
+    ],
+    "vs_previous_meetings": {
+      "new_vs_repeated_ratio": "Insufficient data for comparison",
+      "improvement_areas": "None identified",
+      "trend": "Insufficient data for trend analysis"
+    },
+    "meeting_value_add": {
+      "value_score": 70,
+      "was_meeting_necessary": true,
+      "could_have_been_async": false,
+      "recommendation": "Future meetings should focus on project updates and action item tracking"
+    }
+  },
+  "progress_tracking": {
+    "meeting_type_status": "incremental_progress",
+    "goals_achieved": [
+      "Discussed project technical challenges"
+    ],
+    "goals_in_progress": [
+      "Project action item tracking"
+    ],
+    "goals_blocked": [
+      "None identified"
+    ],
+    "velocity_vs_history": "Insufficient data for comparison",
+    "next_meeting_readiness": "Ready to proceed",
+    "28_day_outlook": "Project progression and potential outcomes"
+  },
+  "strategic_alignment": {
+    "company_goals_alignment": "Insufficient data for company goals",
+    "business_impact": "Potential impact on project timeline and team morale",
+    "cross_team_implications": "Insufficient data for cross-team implications",
+    "timeline_implications": "Potential impact on project timeline",
+    "resource_implications": "Insufficient data for resource implications"
+  },
+  "recommendations": {
+    "immediate_actions": [
+      "Assign and track action items for the hackathon project",
+      "Provide regular project updates"
+    ],
+    "short_term_focus": "Project action item tracking and technical challenge resolution",
+    "longer_term_strategy": "Enhance project tracking and collaboration tools",
+    "process_improvements": [
+      {
+        "improvement": "Regular project updates",
+        "current_state": "Ad-hoc updates",
+        "desired_state": "Scheduled updates",
+        "benefit": "Improved team productivity and project outcomes",
+        "owner": "Harshit Singh",
+        "timeline": "Short-term"
+      }
+    ],
+    "team_coaching": [
+      {
+        "person": "Shivank Bhardwaj",
+        "feedback": "Enhance participation and collaboration skills",
+        "opportunity": "Leadership development",
+        "strength_to_leverage": "Collaborative attitude"
+      }
+    ],
+    "escalations_needed": "None identified",
+    "executive_summary_for_c_suite": "The meeting discussed a meeting tracking API concept and technical challenges. Key decisions included assigning action items related to the hackathon project. Recommendations include enhancing project tracking and collaboration tools, and providing regular project updates."
+  },
+  "meeting_minutes": {
+    "official_date": "2026-03-31",
+    "attendees": [
+      "Harshit Singh",
+      "Shivank Bhardwaj"
+    ],
+    "duration_hours": "Insufficient data for duration",
+    "agenda_items_covered": [
+      {
+        "item_number": 1,
+        "topic": "Hackathon discussion",
+        "discussion_summary": "Discussed meeting tracking API concept, technical challenges, and project progression",
+        "outcome": "decided",
+        "decision": "Assign action items related to the hackathon project",
+        "owner": "Harshit Singh",
+        "timeline": "Insufficient data for specific timeline"
+      }
+    ],
+    "next_meeting_agenda_suggestions": [
+      "Review project action item tracking",
+      "Discuss technical challenge resolution"
+    ]
+  },
+  "document_metadata": {
+    "report_date": "2026-03-31T14:30:00.000060Z",
+    "meeting_intelligence_powered_by": "Meeting Focus Tracker + Professional Intelligence Analysis",
+    "confidence_score": 80,
+    "data_completeness": "Partial data",
+    "caveats": "Limited historical data for comparison, and some metrics could not be calculated due to insufficient information"
+  },
+  "meeting_meta": {
+    "meeting_id": "jmf-bzih-ypf",
+    "platform": "google_meet",
+    "date": "2026-03-31",
+    "total_cycles": 18
+  },
+  "participant_stats": {
+    "Harshit Singh": {
+      "name": "Harshit Singh",
+      "word_count": 487,
+      "segment_count": 13,
+      "word_share_pct": 76.9,
+      "participation_level": "High",
+      "first_seen": "2026-03-31T14:15:50.921060Z",
+      "last_seen": "2026-03-31T14:20:50.122060Z"
+    },
+    "Shivank Bhardwaj": {
+      "name": "Shivank Bhardwaj",
+      "word_count": 146,
+      "segment_count": 4,
+      "word_share_pct": 23.1,
+      "participation_level": "Low",
+      "first_seen": "2026-03-31T14:18:19.665060Z",
+      "last_seen": "2026-03-31T14:21:11.255060Z"
+    }
+  },
+  "deviation_stats": {
+    "total_cycles": 18,
+    "on_track_cycles": 8,
+    "tangential_cycles": 1,
+    "off_topic_cycles": 2
+  },
+  "meeting_id": "jmf-bzih-ypf",
+  "saved_at": "20260331T142424_839790Z"
+}

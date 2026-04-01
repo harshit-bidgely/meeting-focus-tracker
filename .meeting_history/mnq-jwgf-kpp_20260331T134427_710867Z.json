@@ -1,0 +1,36 @@
+{
+  "meeting_overview": {
+    "title": "Hackathon Ideas Discussion and Demo",
+    "date": "2026-03-31",
+    "duration_minutes": "Unknown",
+    "participants_count": 1,
+    "meeting_health": "Fair",
+    "strategic_value": "Medium",
+    "narrative": "The meeting was delayed due to technical issues, and participants were waiting for Harsha to join before discussing hackathon ideas. Although the discussion started, there was limited participation and no decisions or outcomes were reported."
+  },
+  "meeting_meta": {
+    "meeting_id": "mnq-jwgf-kpp",
+    "platform": "google_meet",
+    "date": "2026-03-31",
+    "total_cycles": 6
+  },
+  "participant_stats": {
+    "Shivank Bhardwaj": {
+      "name": "Shivank Bhardwaj",
+      "word_count": 64,
+      "segment_count": 5,
+      "word_share_pct": 100.0,
+      "participation_level": "Medium",
+      "first_seen": "2026-03-31T13:41:21.691574Z",
+      "last_seen": "2026-03-31T13:42:43.088574Z"
+    }
+  },
+  "deviation_stats": {
+    "total_cycles": 6,
+    "on_track_cycles": 1,
+    "tangential_cycles": 0,
+    "off_topic_cycles": 0
+  },
+  "meeting_id": "mnq-jwgf-kpp",
+  "saved_at": "20260331T134427_710867Z"
+}
